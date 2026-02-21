@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-ro
 import { Capacitor } from '@capacitor/core';
 import { seedDatabase } from './services/db';
 import { processQueue } from './services/queueService';
+import { initLocalEngine } from './services/geminiService';
 import { Dashboard } from './views/Dashboard';
 import { RecordView } from './views/RecordView';
 import { DayView } from './views/DayView';
@@ -60,6 +61,16 @@ function App() {
     try {
       seedDatabase();
       processQueue();
+      
+      const summaryMode = localStorage.getItem('SUMMARY_MODE');
+      // Om användaren har valt 'local' som sammanfattningsmetod, förladda filen i bakgrunden.
+      if (summaryMode === 'local') {
+        console.log("App start: Påbörjar förladdning av lokal modell...");
+        initLocalEngine((percent, text) => {
+          // Loggar framsteg i konsolen så du ser att den hittar din GGUF-fil
+          if (percent % 20 === 0) console.log(`Laddar AI: ${percent}% - ${text}`);
+        });
+      }
     } catch (err) {
       console.error("App startup error:", err);
     }

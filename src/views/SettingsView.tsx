@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Key, RotateCcw, PenTool, MessageSquare, Cpu } from 'lucide-react';
+import { ArrowLeft, Save, Key, RotateCcw, PenTool, MessageSquare, Cpu, FolderOpen } from 'lucide-react';
+import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { DEFAULT_DIARY_PROMPT, DEFAULT_QUESTIONS_PROMPT } from '../services/geminiService';
 import { clsx } from 'clsx';
 
@@ -14,6 +15,7 @@ export const SettingsView = () => {
   // Inställningar för motor-läge
   const [transcriptionMode, setTranscriptionMode] = useState('api'); // 'api' | 'local'
   const [summaryMode, setSummaryMode] = useState('api'); // 'api' | 'local'
+  const [localModelPath, setLocalModelPath] = useState('');
 
   useEffect(() => {
     setApiKey(localStorage.getItem('GEMINI_API_KEY') || '');
@@ -24,6 +26,7 @@ export const SettingsView = () => {
     // Hämta motor-inställningar
     setTranscriptionMode(localStorage.getItem('TRANSCRIPTION_MODE') || 'api');
     setSummaryMode(localStorage.getItem('SUMMARY_MODE') || 'api');
+    setLocalModelPath(localStorage.getItem('LOCAL_MODEL_PATH') || '');
   }, []);
 
   const handleSave = () => {
@@ -35,6 +38,7 @@ export const SettingsView = () => {
     // Spara motor-inställningar
     localStorage.setItem('TRANSCRIPTION_MODE', transcriptionMode);
     localStorage.setItem('SUMMARY_MODE', summaryMode);
+    localStorage.setItem('LOCAL_MODEL_PATH', localModelPath.trim());
     
     alert('Dina inställningar har sparats!');
     navigate(-1);
@@ -113,8 +117,56 @@ export const SettingsView = () => {
           </div>
           { (transcriptionMode === 'local' || summaryMode === 'local') && (
             <p className="mt-2 text-[10px] text-indigo-500 font-medium italic">
-              * Lokal AI kräver stöd för Gemini Nano (Pixel 9 Pro).
+              * Lokal AI kräver en kompatibel .gguf-modell (t.ex. Llama-3) eller Gemini Nano-stöd.
             </p>
+          )}
+
+          {/* NYTT: Sektion för vald lokal modell */}
+          {summaryMode === 'local' && (
+             <div className="pt-4 mt-4 border-t border-gray-100">
+               <label className="block text-xs font-bold text-gray-700 mb-2 flex items-center gap-1">
+                 <FolderOpen size={14} /> Sökväg till Lokal GGUF-modell
+               </label>
+               <p className="text-[10px] text-gray-500 mb-2 leading-relaxed">
+                 Ladda ner en .gguf-modell (t.ex. från AI-Sweden-Models) till din telefon och ange sökvägen här. 
+                 Mappen måste vara tillgänglig för appen.
+               </p>
+               <div className="flex flex-col gap-3">
+                 <button 
+                   onClick={async () => {
+                     try {
+                       const result = await FilePicker.pickFiles({
+                         types: ['*/*'], 
+                       });
+                       const file = result.files[0];
+                       if (file && file.path) {
+                         setLocalModelPath(file.path);
+                         alert(`Modell vald:\n${file.name}`);
+                       } else {
+                         alert("Kunde inte hämta sökvägen till filen. Försök flytta den till din vanliga Download-mapp.");
+                       }
+                     } catch (error) {
+                       console.log("Användaren avbröt eller ett fel uppstod:", error);
+                     }
+                   }}
+                   className="bg-indigo-600 text-white px-4 py-2 rounded-xl shadow-sm hover:bg-indigo-700 w-full text-sm font-bold flex items-center justify-center gap-2"
+                 >
+                   <FolderOpen size={18} /> Bläddra och välj modellfil...
+                 </button>
+                 
+                 {localModelPath && (
+                   <div className="text-[10px] text-gray-500 break-all bg-gray-50 p-3 rounded-xl border border-gray-200 font-mono">
+                     <strong>Vald fil:</strong><br/>
+                     {localModelPath}
+                   </div>
+                 )}
+               </div>
+               {!localModelPath && (
+                 <p className="text-[10px] text-amber-500 mt-1 font-medium">
+                   Du måste ange en modell för att kunna använda lokal sammanfattning.
+                 </p>
+               )}
+             </div>
           )}
         </div>
 

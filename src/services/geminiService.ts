@@ -1,4 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { CreateMLCEngine } from "@mlc-ai/web-llm";
+import { Capacitor } from '@capacitor/core';
 import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 import { db, getEntry, getEntryAudio, getDay, getEntriesForDay, updateEntry, updateDay } from "./db";
 
@@ -13,19 +15,89 @@ export const DEFAULT_QUESTIONS_PROMPT = `Du är min personliga AI-coach och dagb
 Fråga till exempel hur jag kände kring en specifik händelse, be mig utveckla något jag nämnde kort, eller fråga vad jag har lärt mig idag. 
 Syftet är att få mig att fördjupa mina tankar och göra dagboken mer personlig och värdefull.`;
 
-// Hjälpfunktion för lokal AI (Gemini Nano)
-const runLocalPrompt = async (prompt: string): Promise<string> => {
-  // @ts-ignore - window.ai är experimentellt för Gemini Nano
-  if (!window.ai || !window.ai.assistant) {
-    throw new Error("Lokal AI (Gemini Nano) är inte tillgänglig. Se till att AICore är aktiverat på din Pixel 9 Pro.");
+// ------------------------------------------------------------------
+// LOKAL AI-MOTOR (WebLLM via Pixel WebGPU och extern modellfil)
+// ------------------------------------------------------------------
+let localEngine: any = null;
+let isEngineLoading = false;
+
+// Funktion för att förladda motorn globalt (t.ex. vid app-start)
+export const initLocalEngine = async (onProgress?: (percent: number, text: string) => void) => {
+  if (localEngine || isEngineLoading) return;
+  
+  const savedPath = localStorage.getItem('LOCAL_MODEL_PATH');
+  if (!savedPath) {
+    console.warn("Lokal AI: Ingen modell-sökväg angiven i inställningar.");
+    return;
   }
+
+  isEngineLoading = true;
   try {
+    // 1. Säkerställ att sökvägen från filväljaren är formaterad som en file-URI
+    let fileUri = savedPath;
+    if (!fileUri.startsWith('file://') && !fileUri.startsWith('content://')) {
+      fileUri = 'file://' + fileUri;
+    }
+
+    // 2. Skapa en säker URL som WebView kan strömma från
+    const modelUrl = Capacitor.convertFileSrc(fileUri);
+    console.log("Laddar modell från URL:", modelUrl);
+
+    // 3. Initiera motorn
     // @ts-ignore
-    const assistant = await window.ai.assistant.create();
-    return await assistant.prompt(prompt);
-  } catch (error: any) {
-    throw new Error("Lokal AI-fel: " + error.message);
+    localEngine = await CreateMLCEngine(
+      "local-custom",
+      {
+        initProgressCallback: (p: any) => {
+          if (onProgress) onProgress(Math.round(p.progress * 100), p.text);
+        },
+        // @ts-ignore
+        model_list: [
+          {
+            model: modelUrl,
+            model_id: "local-custom",
+            model_lib: "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/Llama-3-8B-Instruct-q4f32_1-MLC/Llama-3-8B-Instruct-q4f32_1-android.so"
+          }
+        ]
+      }
+    );
+  } catch (err: any) {
+    console.error("Lokal AI: Kunde inte förladda modellen.", err);
+  } finally {
+    isEngineLoading = false;
   }
+};
+
+const runLocalLlama = async (
+  systemInstruction: string, 
+  prompt: string, 
+  onProgress?: (p: number, msg: string) => void
+): Promise<string> => {
+  
+  if (isEngineLoading) {
+    throw new Error("AI-motorn laddas fortfarande in i minnet. Vänta några sekunder.");
+  }
+
+  if (!localEngine) {
+    onProgress?.(0, "Initierar AI-motor...");
+    await initLocalEngine((percent, text) => onProgress?.(percent, text));
+    if (!localEngine) throw new Error("Kunde inte starta lokal AI-motor. Kontrollera filsökvägen.");
+  }
+
+  onProgress?.(90, "AI tänker... (Genererar text)");
+
+  const messages = [
+    { role: "system", content: systemInstruction },
+    { role: "user", content: prompt }
+  ];
+
+  const reply = await localEngine.chat.completions.create({
+    messages,
+    temperature: 0.3,
+  });
+
+  let textResult = reply.choices[0].message.content || "";
+  return textResult.replace(/```json/g, '').replace(/```/g, '').trim();
 };
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -102,7 +174,7 @@ export const transcribeEntryAI = async (entryId: string, onProgress?: (p: number
 };
 
 // ------------------------------------------------------------------
-// 2. SAMMANFATTA (Väljer mellan API och Lokal motor)
+// 2. SAMMANFATTA DAGEN (Uppdaterad för Llama-3 WebLLM)
 // ------------------------------------------------------------------
 const summarizeSchema = {
   type: Type.OBJECT,
@@ -131,22 +203,36 @@ export const summarizeDayAI = async (dayId: string, onProgress?: (p: number, msg
 
   const customPrompt = localStorage.getItem('GEMINI_PROMPT') || DEFAULT_DIARY_PROMPT;
   const qaText = day.qa?.map(q => `- Fråga: ${q.question}\n  Svar: ${q.answer}`).join('\n\n') || "";
-  const prompt = `${customPrompt}\n\nInlägg:\n${transcriptions}\n${qaText}\n\nSvara ENDAST med ett giltigt JSON-objekt enligt formatet.`;
+  
+  const userData = `Inlägg:\n${transcriptions}\n\nFrågor och svar:\n${qaText}`;
 
   let responseData;
 
   if (mode === 'local') {
-    onProgress?.(50, 'Sammanfattar lokalt (Gemini Nano)...');
-    const localResult = await runLocalPrompt(prompt);
-    responseData = JSON.parse(localResult);
+    const systemPrompt = `${customPrompt}\n\nVIKTIGT: Du MÅSTE svara med ett giltigt JSON-objekt exakt enligt detta schema:
+    {
+      "summary": "Din sammanfattning här",
+      "mood": "En passande emoji",
+      "learnings": ["Lärdom 1", "Lärdom 2"],
+      "peopleMentioned": ["Namn 1"],
+      "tagsMentioned": ["Tagg 1"]
+    }`;
+
+    const localResult = await runLocalLlama(systemPrompt, userData, onProgress);
+    
+    const jsonMatch = localResult.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("Den lokala modellen returnerade inte giltig JSON.");
+    
+    responseData = JSON.parse(jsonMatch[0]);
+
   } else {
+    onProgress?.(50, 'Sammanfattar via Gemini API...');
     const ai = getAIClient();
     if (!ai) throw new Error("API-nyckel saknas.");
-
-    onProgress?.(50, 'Skriver dagbokssammanfattning via API...');
+    const fullPrompt = `${customPrompt}\n\n${userData}\n\nSvara i JSON-format.`;
     const result = await ai.models.generateContent({
       model: getModelName(),
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts: [{ text: fullPrompt }] }],
       config: { responseMimeType: "application/json", responseSchema: summarizeSchema }
     });
     responseData = JSON.parse(result.text || "{}");
@@ -204,7 +290,7 @@ export const reprocessMeetingFromText = async (_meetingId: string, _onProgress?:
 };
 
 // ------------------------------------------------------------------
-// 3. GENERERA FÖRDJUPANDE FRÅGOR
+// 3. GENERERA FRÅGOR & SVAR (Uppdaterad för Llama-3 WebLLM)
 // ------------------------------------------------------------------
 const questionsSchema = {
   type: Type.OBJECT,
@@ -217,9 +303,8 @@ const questionsSchema = {
   }
 };
 
-export const generateQuestionsAI = async (dayId: string) => {
+export const generateQuestionsAI = async (dayId: string, onProgress?: (p: number, msg: string) => void) => {
   const mode = localStorage.getItem('SUMMARY_MODE') || 'api';
-
   const day = await getDay(dayId);
   const entries = await getEntriesForDay(dayId);
 
@@ -230,30 +315,33 @@ export const generateQuestionsAI = async (dayId: string) => {
     .map(e => e.transcription)
     .join('\n\n');
 
-  const customQuestionPrompt = localStorage.getItem('GEMINI_QUESTIONS_PROMPT') || DEFAULT_QUESTIONS_PROMPT;
+  const customQuestionsPrompt = localStorage.getItem('GEMINI_QUESTIONS_PROMPT') || DEFAULT_QUESTIONS_PROMPT;
 
-  const prompt = `${customQuestionPrompt}
-  
-  Läs mina korta dagboksanteckningar från idag:
-  
-  ${transcriptions}\n\nSvara ENDAST med ett giltigt JSON-objekt med egenskapen 'questions' som är en array av strängar.`;
-
-  let responseData;
+  let questions: string[] = [];
 
   if (mode === 'local') {
-    const localResult = await runLocalPrompt(prompt);
-    responseData = JSON.parse(localResult);
-  } else {
-    const ai = getAIClient();
-    if (!ai) throw new Error("API-nyckel saknas. Gå till inställningar.");
+    const systemPrompt = `${customQuestionsPrompt}\n\nVIKTIGT: Du MÅSTE svara med en JSON-lista med 2-3 strängar. Exempel:
+    ["Varför kändes det så?", "Vad kunde du ha gjort annorlunda?"]`;
 
+    const localResult = await runLocalLlama(systemPrompt, transcriptions, onProgress);
+    
+    const jsonMatch = localResult.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error("Den lokala modellen returnerade inte en giltig JSON-lista.");
+    
+    questions = JSON.parse(jsonMatch[0]);
+
+  } else {
+    onProgress?.(50, 'Genererar frågor via Gemini API...');
+    const ai = getAIClient();
+    if (!ai) throw new Error("API-nyckel saknas.");
     const result = await ai.models.generateContent({
       model: getModelName(),
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts: [{ text: `${customQuestionsPrompt}\n\nInlägg:\n${transcriptions}` }] }],
       config: { responseMimeType: "application/json", responseSchema: questionsSchema }
     });
-    responseData = JSON.parse(result.text || "{}");
+    const responseData = JSON.parse(result.text || "{}");
+    questions = responseData.questions || [];
   }
 
-  return responseData.questions || [];
+  return questions;
 };
