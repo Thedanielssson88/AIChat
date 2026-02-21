@@ -1,144 +1,177 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mic, Square, Loader2, ArrowLeft } from 'lucide-react';
-import { clsx } from 'clsx';
+import { Mic, Square, X, Loader2 } from 'lucide-react';
 import { audioRecorder } from '../services/audioRecorder';
 import { getOrCreateDayForDate, addEntry, setEntryAudio } from '../services/db';
-import { addToQueue } from '../services/queueService'; // Vi förbereder för AI-kön (Steg 3)
+import { processQueue } from '../services/queueService';
+// Importera den native-bryggan för röstigenkänning
+import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 
 export const RecordView = () => {
   const navigate = useNavigate();
   const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
-  const [amplitude, setAmplitude] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  // State för att hålla och visa texten live
+  const [liveText, setLiveText] = useState('');
+  const timerRef = useRef<any>(null);
 
-  // Timer och ljudvåg
+  // Kollar om användaren valt lokal transkribering i inställningarna
+  const isLocalMode = localStorage.getItem('TRANSCRIPTION_MODE') === 'local';
+
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (isRecording) {
-      interval = setInterval(async () => {
-        setDuration(d => d + 1);
-        const amp = await audioRecorder.getNativeAmplitude();
-        setAmplitude(amp);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isRecording]);
+    // Fråga om rättigheter direkt när vyn öppnas om vi kör lokalt
+    const initSpeech = async () => {
+      if (isLocalMode) {
+        try {
+          const hasPermission = await SpeechRecognition.checkPermissions();
+          if (hasPermission.speechRecognition !== 'granted') {
+            await SpeechRecognition.requestPermissions();
+          }
+        } catch (e) {
+          console.error("Kunde inte initiera SpeechRecognition", e);
+        }
+      }
+    };
+    initSpeech();
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (isLocalMode) {
+        SpeechRecognition.removeAllListeners().catch(() => {});
+      }
+    };
+  }, [isLocalMode]);
 
   const handleStartRecording = async () => {
     try {
       await audioRecorder.start();
       setIsRecording(true);
-      setDuration(0);
-    } catch (e: any) {
-      alert("Kunde inte starta mikrofonen: " + e.message);
+      setLiveText('');
+
+      // Om vi kör lokalt, starta Androids native röstmotor
+      if (isLocalMode) {
+        try {
+          const available = await SpeechRecognition.available();
+          if (available.available) {
+            await SpeechRecognition.start({
+              language: 'sv-SE',
+              partialResults: true, // Låter oss se orden medan du pratar
+              popup: false,         // Stänger av Googles standard-popup
+            });
+
+            // Lyssna på nya ord live!
+            SpeechRecognition.addListener('partialResults', (data: any) => {
+              if (data.matches && data.matches.length > 0) {
+                setLiveText(data.matches[0]);
+              }
+            });
+          }
+        } catch (speechErr) {
+          console.error("Native speech start error:", speechErr);
+        }
+      }
+
+      timerRef.current = setInterval(() => {
+        setDuration(prev => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("Kunde inte starta inspelning:", err);
+      alert("Kunde inte starta mikrofonen.");
     }
   };
 
   const handleStopRecording = async () => {
-    setIsRecording(false);
-    setIsProcessing(true);
-
+    setIsSaving(true);
+    if (timerRef.current) clearInterval(timerRef.current);
+    
     try {
+      // 1. Stäng av röstmotorn
+      if (isLocalMode) {
+        try {
+          await SpeechRecognition.stop();
+          await SpeechRecognition.removeAllListeners();
+        } catch (e) {
+          console.error("Speech stop error", e);
+        }
+      }
+
+      // 2. Stoppa ljudinspelningen och hämta filen
       const blob = await audioRecorder.stop();
-
-      // 1. Hämta eller skapa Dagens Day
-      const todayString = new Date().toISOString().split('T')[0]; // "2026-02-20"
+      const todayString = new Date().toISOString().split('T')[0];
       const day = await getOrCreateDayForDate(todayString);
-
-      // 2. Skapa ett nytt Entry (addEntry returnerar det nya id:t)
-      const now = new Date();
+      
+      // 3. Spara inlägget till databasen
+      // Om lokalt läge är aktivt sparar vi den live-transkriberade texten direkt!
+      const finalTranscription = isLocalMode ? liveText.trim() : "";
+      
       const entryId = await addEntry({
         dayId: day.id,
-        createdAt: now.toISOString(),
-        isTranscribed: false
+        createdAt: new Date().toISOString(),
+        isTranscribed: isLocalMode && finalTranscription.length > 0, // Klar direkt om lokalt!
+        transcription: finalTranscription
       });
 
-      // 3. Spara ljudfilen kopplat till detta Entry
+      // 4. Spara ljudfilen för framtida referens
       await setEntryAudio(entryId, blob, blob.type);
-
-      // 4. Lägg inlägget i kön för att transkriberas (Steg 3)
-      addToQueue(entryId, 'audio');
-
-      // Gå till Dashboard/Dagboken när det är klart
-      navigate('/');
-    } catch (e: any) {
-      alert("Kunde inte spara inlägget: " + e.message);
-    } finally {
-      setIsProcessing(false);
+      
+      // 5. Starta kön BARA om vi använder API-läget
+      if (!isLocalMode) {
+        processQueue();
+      }
+      
+      navigate(`/day/${day.id}`);
+    } catch (err) {
+      console.error("Fel vid sparande:", err);
+      setIsSaving(false);
+      alert("Kunde inte spara inlägget.");
     }
   };
 
   const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col relative pb-20">
-
-      {/* HEADER */}
-      <div className="bg-white p-6 pb-4 shadow-sm relative z-10 flex items-center">
-        <button onClick={() => navigate(-1)} className="p-2 bg-gray-100 rounded-full text-gray-600 hover:bg-gray-200 transition-colors">
-          <ArrowLeft size={20} />
-        </button>
-        <h1 className="text-xl font-bold ml-4 text-gray-800">Nytt Inlägg</h1>
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white relative">
+      <div className="mb-12 text-center">
+        <div className="text-6xl font-mono mb-4 tracking-tighter">
+          {formatTime(duration)}
+        </div>
+        {isRecording && (
+          <div className="flex items-center justify-center gap-2 text-red-400 animate-pulse">
+            <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+            <span className="text-sm font-bold uppercase tracking-widest">Spelar in...</span>
+          </div>
+        )}
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center p-6 mt-[-10vh]">
+      {/* Visar texten live på skärmen! */}
+      <div className="w-full max-w-md h-32 flex items-center justify-center mb-8 px-4 text-center">
+        {isRecording && isLocalMode && (
+          <p className="text-xl text-gray-300 font-medium italic leading-relaxed">
+            {liveText || "Lyssnar (Native Pixel)..."}
+          </p>
+        )}
+      </div>
 
-        {/* TIMER & VÅG */}
-        <div className="text-center mb-16">
-          <div className={clsx("text-6xl font-light mb-8 transition-colors duration-500", isRecording ? "text-red-500" : "text-gray-300")}>
-            {formatTime(duration)}
-          </div>
-
-          <div className="h-24 flex items-end justify-center gap-1 opacity-80">
-            {Array.from({ length: 30 }).map((_, i) => {
-              const baseHeight = 8;
-              const randomScale = isRecording ? Math.random() : 0.1;
-              const height = baseHeight + (amplitude * 100 * randomScale);
-              return (
-                <div
-                  key={i}
-                  className={clsx("w-2 rounded-full transition-all duration-150", isRecording ? "bg-red-500" : "bg-gray-200")}
-                  style={{ height: `${Math.max(baseHeight, Math.min(height, 96))}px` }}
-                />
-              );
-            })}
-          </div>
-        </div>
-
-        {/* INSPELNINGSKNAPPEN */}
-        <div className="relative">
-          {isRecording && (
-            <div className="absolute inset-0 bg-red-500 rounded-full animate-ping opacity-20 scale-150"></div>
-          )}
-
-          <button
-            onClick={isRecording ? handleStopRecording : handleStartRecording}
-            disabled={isProcessing}
-            className={clsx(
-              "w-28 h-28 rounded-full flex items-center justify-center shadow-xl z-10 relative transition-all duration-300",
-              isRecording ? "bg-white text-red-500 scale-110" : "bg-red-500 text-white hover:scale-105 active:scale-95",
-              isProcessing && "opacity-50 cursor-not-allowed"
-            )}
-          >
-            {isProcessing ? (
-              <Loader2 className="animate-spin" size={40} />
-            ) : isRecording ? (
-              <Square fill="currentColor" size={40} />
-            ) : (
-              <Mic fill="currentColor" size={50} />
-            )}
+      <div className="flex flex-col items-center gap-8">
+        {!isRecording ? (
+          <button onClick={handleStartRecording} className="w-24 h-24 bg-red-600 rounded-full flex items-center justify-center shadow-2xl shadow-red-900/20 active:scale-90 transition-transform">
+            <Mic size={40} fill="currentColor" />
           </button>
-        </div>
+        ) : (
+          <button onClick={handleStopRecording} disabled={isSaving} className="w-24 h-24 bg-white text-slate-900 rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform disabled:opacity-50">
+            {isSaving ? <Loader2 className="animate-spin" size={40} /> : <Square size={40} fill="currentColor" />}
+          </button>
+        )}
 
-        <p className="mt-8 text-gray-400 font-medium tracking-wide uppercase text-sm">
-          {isRecording ? "Tryck för att stoppa" : "Tryck för att prata"}
-        </p>
+        <button onClick={() => navigate(-1)} disabled={isSaving} className="text-gray-500 font-bold flex items-center gap-2 hover:text-white transition-colors">
+          <X size={20} /> AVBRYT
+        </button>
       </div>
     </div>
   );

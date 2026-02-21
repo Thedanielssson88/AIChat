@@ -63,39 +63,39 @@ const transcribeSchema = {
 export const transcribeEntryAI = async (entryId: string, onProgress?: (p: number, msg: string) => void) => {
   const mode = localStorage.getItem('TRANSCRIPTION_MODE') || 'api';
   const entry = await getEntry(entryId);
-  const audio = await getEntryAudio(entryId);
 
-  if (!entry || !audio) throw new Error("Inlägg eller ljudfil saknas.");
+  if (!entry) throw new Error("Inlägg saknas.");
 
-  let transcriptionText = "";
-
-  if (mode === 'local') {
-    onProgress?.(10, 'Använder lokal röstmotor...');
-    const available = await SpeechRecognition.available();
-    if (!available.available) throw new Error("Lokal röstigenkänning är inte tillgänglig.");
-
-    // Notera: Standard Android-motor transkriberar främst live-tal. 
-    // För att transkribera sparade filer lokalt används ofta molnet som backup 
-    // om inte en specifik on-device-modul som Whisper WASM används.
-    throw new Error("Lokal fil-transkribering stöds inte direkt via pluginet än. Använd API.");
-  } else {
-    // Molnbaserad transkribering via Gemini API
-    const ai = getAIClient();
-    if (!ai) throw new Error("API-nyckel saknas.");
-
-    onProgress?.(20, 'Förbereder ljudfil...');
-    const base64Audio = await blobToBase64(audio.blob);
-    const prompt = `Du är en expert på att transkribera svenskt tal. Lyssna på denna röstanteckning och skriv ner exakt vad som sägs. Din output ska endast vara den transkriberade texten. Lägg inte till kommentarer.`;
-
-    onProgress?.(40, 'Transkriberar via API...');
-    const result = await ai.models.generateContent({
-      model: getModelName(),
-      contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: audio.mimeType, data: base64Audio } }] }],
-      config: { responseMimeType: "application/json", responseSchema: transcribeSchema }
-    });
-    const responseData = JSON.parse(result.text || "{}");
-    transcriptionText = responseData.text || "";
+  // NYTT: Om inlägget redan har transkriberats live (Lokalt mode), hoppa över API-steget!
+  if (entry.isTranscribed && entry.transcription) {
+    onProgress?.(100, 'Klar (Lokal)');
+    return { text: entry.transcription };
   }
+
+  // Om den var inställd på lokal, men ingen text kom in (t.ex. knäpptyst eller fel på micken)
+  if (mode === 'local') {
+    await updateEntry(entryId, { transcription: "Inget tal registrerades av den lokala röstmotorn.", isTranscribed: true });
+    return { text: "" };
+  }
+
+  // Molnbaserad transkribering via Gemini API
+  const ai = getAIClient();
+  const audio = await getEntryAudio(entryId);
+  if (!ai) throw new Error("API-nyckel saknas.");
+  if (!audio) throw new Error("Ljud saknas.");
+
+  onProgress?.(20, 'Förbereder ljudfil...');
+  const base64Audio = await blobToBase64(audio.blob);
+  const prompt = `Du är en expert på att transkribera svenskt tal. Lyssna på denna röstanteckning och skriv ner exakt vad som sägs. Din output ska endast vara den transkriberade texten. Lägg inte till kommentarer.`;
+
+  onProgress?.(40, 'Transkriberar via API...');
+  const result = await ai.models.generateContent({
+    model: getModelName(),
+    contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: audio.mimeType, data: base64Audio } }] }],
+    config: { responseMimeType: "application/json", responseSchema: transcribeSchema }
+  });
+  const responseData = JSON.parse(result.text || "{}");
+  const transcriptionText = responseData.text || "";
 
   await updateEntry(entryId, { transcription: transcriptionText, isTranscribed: true });
   return { text: transcriptionText };
