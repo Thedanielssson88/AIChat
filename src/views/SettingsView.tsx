@@ -2,11 +2,14 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Key, RotateCcw, PenTool, MessageSquare } from 'lucide-react';
 import { DEFAULT_DIARY_PROMPT, DEFAULT_QUESTIONS_PROMPT } from '../services/geminiService'; // Se till att båda är importerade
+import clsx from 'clsx';
 
 export const SettingsView = () => {
   const navigate = useNavigate();
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('flash');
+  const [transcriptionMode, setTranscriptionMode] = useState('api'); // 'api' | 'local'
+  const [summaryMode, setSummaryMode] = useState('api'); // 'api' | 'local'
   
   // States för prompts
   const [customPrompt, setCustomPrompt] = useState('');
@@ -15,6 +18,8 @@ export const SettingsView = () => {
   useEffect(() => {
     setApiKey(localStorage.getItem('GEMINI_API_KEY') || '');
     setModel(localStorage.getItem('GEMINI_MODEL') || 'flash');
+    setTranscriptionMode(localStorage.getItem('TRANSCRIPTION_MODE') || 'api');
+    setSummaryMode(localStorage.getItem('SUMMARY_MODE') || 'api');
     setCustomPrompt(localStorage.getItem('GEMINI_PROMPT') || DEFAULT_DIARY_PROMPT);
     setCustomQuestionsPrompt(localStorage.getItem('GEMINI_QUESTIONS_PROMPT') || DEFAULT_QUESTIONS_PROMPT);
   }, []);
@@ -22,6 +27,8 @@ export const SettingsView = () => {
   const handleSave = () => {
     localStorage.setItem('GEMINI_API_KEY', apiKey.trim());
     localStorage.setItem('GEMINI_MODEL', model);
+    localStorage.setItem('TRANSCRIPTION_MODE', transcriptionMode);
+    localStorage.setItem('SUMMARY_MODE', summaryMode);
     localStorage.setItem('GEMINI_PROMPT', customPrompt.trim());
     localStorage.setItem('GEMINI_QUESTIONS_PROMPT', customQuestionsPrompt.trim());
     alert('Dina inställningar har sparats!');
@@ -86,6 +93,46 @@ export const SettingsView = () => {
                 Smart (Pro)
               </button>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-gray-700 mb-2">Bearbetnings-läge</label>
+            <div className="space-y-4">
+              {/* Transkribering */}
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
+                <span className="text-sm font-medium text-gray-700">Transkribering</span>
+                <div className="flex bg-gray-200 rounded-lg p-1 w-32">
+                  <button 
+                    onClick={() => setTranscriptionMode('api')}
+                    className={clsx("flex-1 text-[10px] font-bold py-1 rounded-md transition-all", transcriptionMode === 'api' ? "bg-white shadow-sm" : "text-gray-500")}
+                  >API</button>
+                  <button 
+                    onClick={() => setTranscriptionMode('local')}
+                    className={clsx("flex-1 text-[10px] font-bold py-1 rounded-md transition-all", transcriptionMode === 'local' ? "bg-white shadow-sm" : "text-gray-500")}
+                  >LOKAL</button>
+                </div>
+              </div>
+
+              {/* Sammanfattning */}
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
+                <span className="text-sm font-medium text-gray-700">Sammanfattning</span>
+                <div className="flex bg-gray-200 rounded-lg p-1 w-32">
+                  <button 
+                    onClick={() => setSummaryMode('api')}
+                    className={clsx("flex-1 text-[10px] font-bold py-1 rounded-md transition-all", summaryMode === 'api' ? "bg-white shadow-sm" : "text-gray-500")}
+                  >API</button>
+                  <button 
+                    onClick={() => setSummaryMode('local')}
+                    className={clsx("flex-1 text-[10px] font-bold py-1 rounded-md transition-all", summaryMode === 'local' ? "bg-white shadow-sm" : "text-gray-500")}
+                  >LOKAL</button>
+                </div>
+              </div>
+            </div>
+            { (transcriptionMode === 'local' || summaryMode === 'local') && (
+              <p className="mt-2 text-[10px] text-indigo-500 font-medium italic">
+                * Lokal bearbetning kräver en enhet med stöd för Gemini Nano (t.ex. Pixel 9 Pro).
+              </p>
+            )}
           </div>
         </div>
 
