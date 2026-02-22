@@ -6,6 +6,7 @@ import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 // Definiera din nya Nano-bro
 interface GeminiNanoPlugin {
   generateText(options: { systemPrompt: string, prompt: string }): Promise<{ text: string }>;
+  getRealPath(options: { uri: string }): Promise<{ path: string }>; // Ny metod!
 }
 const GeminiNano = registerPlugin<GeminiNanoPlugin>('GeminiNano');
 import { db, getEntry, getEntryAudio, getDay, getEntriesForDay, updateEntry, updateDay } from "./db";
@@ -31,21 +32,24 @@ export const initLocalEngine = async (onProgress?: (percent: number, text: strin
   // Om motorn redan är igång, ladda inte om den
   if (isModelLoaded && llamaContext) return;
   
-  const savedPath = localStorage.getItem('LOCAL_MODEL_PATH');
-  if (!savedPath) {
+  const savedUri = localStorage.getItem('LOCAL_MODEL_PATH');
+  if (!savedUri) {
     console.warn("Lokal AI: Ingen modell-sökväg angiven.");
     return;
   }
 
   try {
-    onProgress?.(10, "Laddar in Llama-3 i Pixelns processor...");
+    onProgress?.(10, "Översätter filsökväg...");
     
-    // Rensa bort eventuella "file://" prefix som filväljaren kan ha lagt till
-    const cleanPath = savedPath.replace('file://', '').replace('content://', '');
+    // ANVÄND DIN NYA JAVA-BRO FÖR ATT FIXA SÖKVÄGEN
+    const { path: realPath } = await GeminiNano.getRealPath({ uri: savedUri });
+    console.log("Översatt sökväg:", realPath);
 
-    // Initiera C++ motorn direkt med din 5GB fil
+    onProgress?.(20, "Laddar in modell...");
+    
+    // Initiera C++ motorn direkt med den RIKTIGA sökvägen
     llamaContext = await initLlama({
-      model: cleanPath,
+      model: realPath,
       n_ctx: 2048,          // Hur mycket kontext (text) den kan minnas samtidigt
       n_threads: 4,         // Använder 4 processorkärnor
       n_gpu_layers: 99      // Siffra > 0 tvingar Android att använda GPU/Vulkan för maximal hastighet
