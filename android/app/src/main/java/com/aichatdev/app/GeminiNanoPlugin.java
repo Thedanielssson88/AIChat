@@ -1,4 +1,4 @@
-package com.motesapp.app;
+package com.aichatdev.app;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;

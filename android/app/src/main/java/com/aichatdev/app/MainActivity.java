@@ -1,4 +1,4 @@
-package com.motesapp.app; // Ändrat till motesapp för att matcha mappen och pluginet
+package com.aichatdev.app; // Ändrat till motesapp för att matcha mappen och pluginet
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;

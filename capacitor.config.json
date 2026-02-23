@@ -1,5 +1,5 @@
 {
-  "appId": "com.motesapp.app",
+  "appId": "com.dagboksapp.app",
   "appName": "Dagboksapp",
   "webDir": "dist",
   "bundledWebRuntime": false,
