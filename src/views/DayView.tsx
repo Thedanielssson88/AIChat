@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, addEntry, updateEntry, deleteEntry } from '../services/db';
 import { summarizeDayAI, generateQuestionsAI } from '../services/geminiService';
-import { ArrowLeft, Mic, Sparkles, Loader2, RefreshCw, Edit2, PenLine, X, Trash2, Clock, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Mic, Sparkles, Loader2, RefreshCw, Edit2, PenLine, X, Trash2, Clock, MessageSquare, HelpCircle, Check } from 'lucide-react';
 import { clsx } from 'clsx';
 
 export const DayView = () => {
@@ -12,6 +12,7 @@ export const DayView = () => {
   
   const day = useLiveQuery(() => db.days.get(id!), [id]);
   const entries = useLiveQuery(() => db.entries.where('dayId').equals(id!).sortBy('createdAt'), [id]);
+  const processingJobs = useLiveQuery(() => db.processingJobs.toArray(), []);
   
   const people = useLiveQuery(() => db.people.where('id').anyOf(day?.personIds || []).toArray(), [day?.personIds]);
   const tags = useLiveQuery(() => db.tags.where('id').anyOf(day?.tagIds || []).toArray(), [day?.tagIds]);
@@ -22,15 +23,26 @@ export const DayView = () => {
   const [isEditingSummary, setIsEditingSummary] = useState(false);
   const [editedSummary, setEditedSummary] = useState('');
 
+  const [isEditingQuestions, setIsEditingQuestions] = useState(false);
+  const [editedQuestions, setEditedQuestions] = useState<string[]>([]);
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
+
   const [isWriting, setIsWriting] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
 
   // Nya states för flikar och Q&A
   const [activeTab, setActiveTab] = useState<'timeline' | 'qa'>('timeline');
-  const [isFetchingQa, setIsFetchingQa] = useState(false);
   const [isQaModalOpen, setIsQaModalOpen] = useState(false);
   const [qaList, setQaList] = useState<{question: string, answer: string}[]>([]);
+
+  // Uppdatera editedQuestions när day laddas
+  const questions = day?.questions || [];
+  useEffect(() => {
+    if (questions.length > 0) {
+      setEditedQuestions(questions);
+    }
+  }, [questions]);
 
   if (!day) return <div className="p-6 text-center text-gray-500 mt-10">Laddar dag...</div>;
 
@@ -55,6 +67,16 @@ export const DayView = () => {
     setIsEditingSummary(false);
   };
 
+  const handleSaveQuestions = async () => {
+    try {
+      await db.days.update(day.id, { questions: editedQuestions });
+      setIsEditingQuestions(false);
+    } catch (err) {
+      console.error("Kunde inte spara frågor:", err);
+      alert("Något gick fel när frågorna skulle sparas.");
+    }
+  };
+
   const handleSaveTextEntry = async () => {
     if (!textInput.trim()) return;
     await addEntry({ dayId: day.id, createdAt: new Date().toISOString(), isTranscribed: true, transcription: textInput.trim() });
@@ -72,16 +94,17 @@ export const DayView = () => {
   };
 
   // NY FUNKTION: Hämta frågor från AI
-  const handleGetQuestions = async () => {
-    setIsFetchingQa(true);
+  const handleGenerateQuestions = async () => {
+    setIsGeneratingQuestions(true);
     try {
-      const questions = await generateQuestionsAI(day.id);
-      setQaList(questions.map((q: string) => ({ question: q, answer: '' })));
-      setIsQaModalOpen(true);
+      const qs = await generateQuestionsAI(day.id);
+      setEditedQuestions(qs);
+      await db.days.update(day.id, { questions: qs });
+      setQaList(qs.map((q: string) => ({ question: q, answer: '' })));
     } catch (e: any) {
       alert("Kunde inte hämta frågor: " + e.message);
     } finally {
-      setIsFetchingQa(false);
+      setIsGeneratingQuestions(false);
     }
   };
 
@@ -182,6 +205,10 @@ export const DayView = () => {
           <div className="mt-6 space-y-4">
             {entries?.map((entry) => {
               const time = new Date(entry.createdAt).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+              
+              // Hitta om detta inlägg ligger i kön eller har kraschat
+              const job = processingJobs?.find(j => j.meetingId === entry.id);
+              
               return (
                 <div key={entry.id} className="flex gap-4 group">
                   <div className="flex flex-col items-center min-w-[50px]">
@@ -190,8 +217,27 @@ export const DayView = () => {
                   </div>
                   <div className="flex-1 bg-white p-4 pr-10 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 mb-2 relative">
                     <button onClick={() => handleDeleteEntry(entry.id)} className="absolute top-2 right-2 p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                    
                     {!entry.isTranscribed ? (
-                      <div className="flex items-center gap-2 text-gray-400 text-sm font-medium animate-pulse"><Loader2 className="animate-spin" size={14} /> Transkriberar...</div>
+                      job?.status === 'error' ? (
+                        <div className="text-red-600 text-sm font-medium p-3 bg-red-50 border border-red-100 rounded-xl flex flex-col gap-2">
+                          <span className="font-bold">⚠️ Ett fel uppstod</span>
+                          <span className="text-xs opacity-80">{job.message}</span>
+                          <button 
+                            onClick={() => {
+                              db.processingJobs.update(job.id, {status: 'pending', message: 'Försöker igen...'});
+                              import('../services/queueService').then(m => m.processQueue());
+                            }} 
+                            className="mt-1 w-full bg-red-600 text-white py-2 rounded-lg text-xs font-bold active:scale-95 transition-all">
+                            Försök igen
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-3 text-indigo-500 text-sm font-bold bg-indigo-50/50 p-3 rounded-xl border border-indigo-50">
+                          <Loader2 className="animate-spin" size={16} /> 
+                          {job?.message || 'Ligger i kö...'} 
+                        </div>
+                      )
                     ) : (
                       editingEntryId === entry.id ? (
                         <textarea autoFocus defaultValue={entry.transcription} onBlur={(e) => handleSaveEntryEdit(entry.id, e.target.value)} className="w-full text-gray-800 text-sm leading-relaxed bg-gray-50 border border-indigo-200 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none min-h-[80px]" />
@@ -207,8 +253,80 @@ export const DayView = () => {
           </div>
         ) : (
           <div className="mt-6 space-y-4">
+            {/* Frågor & Svar Sektion */}
+            <div className="bg-white p-6 rounded-3xl border border-indigo-100 shadow-sm space-y-4">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4" /> Frågor & Svar
+                </h3>
+                <div className="flex gap-2">
+                  {!isEditingQuestions ? (
+                    <button 
+                      onClick={() => setIsEditingQuestions(true)}
+                      className="p-2 hover:bg-indigo-50 rounded-full text-indigo-400 transition-colors"
+                      title="Redigera frågor"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={handleSaveQuestions}
+                      className="flex items-center gap-1 px-3 py-1 bg-green-500 text-white rounded-full text-xs font-bold hover:bg-green-600 shadow-sm transition-colors"
+                    >
+                      <Check size={14} /> Spara
+                    </button>
+                  )}
+
+                  <button
+                    onClick={handleGenerateQuestions}
+                    disabled={isGeneratingQuestions || !entries || entries.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-colors disabled:opacity-50 text-xs font-bold"
+                  >
+                    <RefreshCw size={14} className={clsx(isGeneratingQuestions && "animate-spin")} />
+                    Hämta frågor
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {isGeneratingQuestions ? (
+                  <div className="flex flex-col items-center justify-center py-8">
+                    <Loader2 className="w-8 h-8 text-indigo-400 animate-spin mb-4" />
+                    <p className="text-sm text-indigo-600 font-medium">AI tänker ut frågor...</p>
+                  </div>
+                ) : questions.length > 0 ? (
+                  <div className="space-y-4">
+                    {isEditingQuestions ? (
+                      editedQuestions.map((q, idx) => (
+                        <textarea
+                          key={idx}
+                          value={q}
+                          onChange={(e) => {
+                            const newQs = [...editedQuestions];
+                            newQs[idx] = e.target.value;
+                            setEditedQuestions(newQs);
+                          }}
+                          className="w-full bg-slate-50 border border-indigo-100 rounded-xl p-3 text-sm text-gray-800 focus:ring-2 focus:ring-indigo-400 outline-none"
+                          rows={2}
+                        />
+                      ))
+                    ) : (
+                      questions.map((q, idx) => (
+                        <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-indigo-50 text-sm text-gray-700 leading-relaxed">
+                          {q}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 text-center py-4">Inga frågor genererade än.</p>
+                )}
+              </div>
+            </div>
+
             {day.qa && day.qa.length > 0 && (
-              <div className="space-y-4 mb-6">
+              <div className="space-y-4 pt-4 border-t border-gray-100">
+                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest px-2">Dina Svar</h3>
                 {day.qa.map((qa, i) => (
                   <div key={i} className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-100">
                     <h4 className="font-bold text-indigo-900 text-sm mb-3 flex gap-2"><Sparkles size={16} className="text-indigo-400 flex-shrink-0 mt-0.5"/> {qa.question}</h4>
@@ -219,13 +337,15 @@ export const DayView = () => {
             )}
             
             <button 
-              onClick={handleGetQuestions} 
-              disabled={isFetchingQa || !entries || entries.length === 0}
-              className="w-full py-4 rounded-2xl font-bold flex flex-col items-center justify-center gap-2 transition-all shadow-sm border bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100 disabled:opacity-50"
+              onClick={() => {
+                setQaList((day.questions || []).map(q => ({ question: q, answer: '' })));
+                setIsQaModalOpen(true);
+              }} 
+              disabled={isGeneratingQuestions || !day.questions || day.questions.length === 0}
+              className="w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm border bg-indigo-600 text-white border-transparent hover:bg-indigo-700 disabled:opacity-50 mt-4"
             >
-              {isFetchingQa ? <><Loader2 className="animate-spin" size={20}/> Hämtar frågor...</> : <><MessageSquare size={20}/> Fördjupa dagen med AI-frågor</>}
+              <MessageSquare size={20}/> Svara på frågorna
             </button>
-            {(!entries || entries.length === 0) && <p className="text-xs text-center text-gray-400">Du måste skriva några inlägg först.</p>}
           </div>
         )}
       </div>

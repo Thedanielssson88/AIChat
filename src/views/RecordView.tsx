@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Mic, Square, X, Loader2 } from 'lucide-react';
 import { startRecording, stopRecording } from '../services/audioRecorder';
 import { getOrCreateDayForDate, addEntry, setEntryAudio } from '../services/db';
-import { processQueue } from '../services/queueService';
+import { addToQueue } from '../services/queueService';
 import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 
 export const RecordView = () => {
@@ -121,15 +121,16 @@ export const RecordView = () => {
         });
       } else {
         // API-LÄGE
-        const audioData = await stopRecording();
+        const audioBlob = await stopRecording(); // Fånga blobben direkt
         const entryId = await addEntry({
           dayId: day.id,
           createdAt: new Date().toISOString(),
-                                       isTranscribed: false,
-                                       transcription: ""
+          isTranscribed: false,
+          transcription: ""
         });
-        await setEntryAudio(entryId, audioData.blob, audioData.mimeType);
-        processQueue();
+        // Spara blobben och hämta dess inbyggda mime-typ
+        await setEntryAudio(entryId, audioBlob, audioBlob.type);
+        await addToQueue(entryId, 'audio');
       }
       navigate(`/day/${day.id}`);
     } catch (err) {

@@ -3,101 +3,97 @@ import { initLlama } from 'llama-cpp-capacitor';
 import { registerPlugin } from '@capacitor/core';
 import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 
-// Definiera din nya Nano-bro
 interface GeminiNanoPlugin {
   generateText(options: { systemPrompt: string, prompt: string }): Promise<{ text: string }>;
-  getRealPath(options: { uri: string }): Promise<{ path: string }>; // Ny metod!
+  getRealPath(options: { uri: string }): Promise<{ path: string }>;
 }
 const GeminiNano = registerPlugin<GeminiNanoPlugin>('GeminiNano');
 import { db, getEntry, getEntryAudio, getDay, getEntriesForDay, updateEntry, updateDay } from "./db";
 
-// Standard-prompts för dagbok och frågor
 export const DEFAULT_DIARY_PROMPT = `Du är en expert på att skriva personliga dagboksinlägg. 
 Din uppgift är att skriva ett sammanhängande och reflekterande dagboksinlägg baserat på mina röstanteckningar. 
-Skriv i JAG-form (t.ex. "Idag kände jag mig...", "Vi åkte till..."), precis som om jag själv hade satt mig ner och skrivit i min egen dagbok. 
-Fånga mina känslor, vad jag har gjort och vilka jag har träffat. Avsluta gärna med en tanke inför morgondagen. 
-Extrahera även namnen på de personer jag nämner, samt skapa passande taggar för platserna eller ämnena jag pratar om.`;
+Skriv i JAG-form. Fånga mina känslor, vad jag har gjort och vilka jag har träffat.`;
 
-export const DEFAULT_QUESTIONS_PROMPT = `Du är min personliga AI-coach och dagbok. Din uppgift är att ställa 2-3 öppna, reflekterande och nyfikna frågor till mig i "du"-form. 
-Fråga till exempel hur jag kände kring en specifik händelse, be mig utveckla något jag nämnde kort, eller fråga vad jag har lärt mig idag. 
-Syftet är att få mig att fördjupa mina tankar och göra dagboken mer personlig och värdefull.`;
+export const DEFAULT_QUESTIONS_PROMPT = `Du är min personliga AI-coach och dagbok. Din uppgift är att ställa 2-3 öppna, reflekterande frågor till mig i "du"-form baserat på mina anteckningar.`;
+
+// Hjälpmetod för att extrahera JSON
+const extractJson = (text: string, startChar: '{' | '[', endChar: '}' | ']') => {
+  const first = text.indexOf(startChar);
+  const last = text.lastIndexOf(endChar);
+  if (first === -1 || last === -1 || last < first) return null;
+  return text.substring(first, last + 1);
+};
+
+const getConfig = (type: 'transcribe' | 'summary' | 'questions') => {
+  const tempMap = {
+    transcribe: Number(localStorage.getItem('TEMP_TRANSCRIBE') || 0.0),
+    summary: Number(localStorage.getItem('TEMP_SUMMARY') || 0.3),
+    questions: Number(localStorage.getItem('TEMP_QUESTIONS') || 0.0),
+  };
+  const tokenMap = {
+    transcribe: 2000, 
+    summary: Number(localStorage.getItem('MAX_TOKENS_SUMMARY') || 1500),
+    questions: Number(localStorage.getItem('MAX_TOKENS_QUESTIONS') || 500),
+  };
+  return { temp: tempMap[type], maxTokens: tokenMap[type] };
+};
 
 // ------------------------------------------------------------------
-// LOKAL AI-MOTOR (Native via llama-cpp-capacitor)
+// AI MOTORER
 // ------------------------------------------------------------------
 let llamaContext: any = null;
 let isModelLoaded = false;
 
 export const initLocalEngine = async (onProgress?: (percent: number, text: string) => void) => {
-  // Om motorn redan är igång, ladda inte om den
   if (isModelLoaded && llamaContext) return;
-  
   const savedUri = localStorage.getItem('LOCAL_MODEL_PATH');
-  if (!savedUri) {
-    console.warn("Lokal AI: Ingen modell-sökväg angiven.");
-    return;
-  }
-
+  if (!savedUri) return;
   try {
-    onProgress?.(10, "Översätter filsökväg...");
-    
-    // ANVÄND DIN NYA JAVA-BRO FÖR ATT FIXA SÖKVÄGEN
     const { path: realPath } = await GeminiNano.getRealPath({ uri: savedUri });
-    console.log("Översatt sökväg:", realPath);
-
-    onProgress?.(20, "Laddar in modell...");
-    
-    // Initiera C++ motorn direkt med den RIKTIGA sökvägen
-    llamaContext = await initLlama({
-      model: realPath,
-      n_ctx: 2048,          // Hur mycket kontext (text) den kan minnas samtidigt
-      n_threads: 4,         // Använder 4 processorkärnor
-      n_gpu_layers: 99      // Siffra > 0 tvingar Android att använda GPU/Vulkan för maximal hastighet
-    });
-
+    llamaContext = await initLlama({ model: realPath, n_ctx: 2048, n_threads: 4, n_gpu_layers: 99 });
     isModelLoaded = true;
-    onProgress?.(100, "Modell redo!");
-    console.log("Llama-3 laddades framgångsrikt via Native C++!");
-
-  } catch (err: any) {
-    console.error("Lokal AI: Kunde inte ladda modellen via Llama.cpp.", err);
-    throw new Error("Kunde inte starta AI-motorn. Kontrollera att filen är en giltig GGUF.");
+  } catch (err) {
+     console.error("Native Llama error:", err);
   }
 };
 
-const runLocalLlama = async (
-  systemInstruction: string, 
-  prompt: string, 
-  onProgress?: (p: number, msg: string) => void
-): Promise<string> => {
+const runLocalLlama = async (sys: string, prompt: string, temp: number, max: number, onProgress?: any) => {
+  if (!isModelLoaded) await initLocalEngine();
+  const formatted = `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${sys}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`;
+  const result = await llamaContext.completion({ prompt: formatted, n_predict: max, temperature: temp });
+  return result.text || "";
+};
+
+const runLMStudio = async (system: string, prompt: string, temp: number, max: number, onProgress?: any) => {
+  onProgress?.(20, "Ansluter till AI...");
+  const baseUrl = localStorage.getItem('LLM_SERVER_URL') || 'http://10.0.2.2:1234/v1';
   
-  // Säkerställ att filen är inläst i processorn innan vi ställer en fråga
-  if (!isModelLoaded || !llamaContext) {
-    onProgress?.(0, "Initierar Native AI-motor...");
-    await initLocalEngine((percent, text) => onProgress?.(percent, text));
-  }
-
-  onProgress?.(90, "AI tänker... (Genererar text på enheten)");
-
   try {
-    // Formatera prompten exakt så som Llama-3-modeller förväntar sig (ChatML-format)
-    const formattedPrompt = `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${systemInstruction}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`;
-
-    // Kör igång tänkandet i C++ pluginet
-    const result = await llamaContext.completion({
-      prompt: formattedPrompt,
-      n_predict: 1000, // Max antal ord den får generera
-      temperature: 0.3,
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
+        temperature: temp,
+        max_tokens: max
+      })
     });
 
-    let textResult = result.text || "";
-    
-    // Rensa bort markdown
-    return textResult.replace(/```json/g, '').replace(/```/g, '').trim();
+    if (!response.ok) {
+       throw new Error(`Server svarade med status: ${response.status}`);
+    }
 
+    const data = await response.json();
+    
+    // Säkerställ att data.choices och data.choices[0] existerar innan vi läser dem!
+    if (data && data.choices && data.choices.length > 0 && data.choices[0].message) {
+        return data.choices[0].message.content || "";
+    } else {
+        console.error("Ogiltigt server-svar:", data);
+        throw new Error("Servern skickade ett okänt format.");
+    }
   } catch (err: any) {
-    console.error("Fel vid generering:", err);
-    throw new Error("AI:n kraschade under textgenereringen.");
+     throw new Error(`Kunde inte nå AI-servern (${baseUrl}): ${err.message}`);
   }
 };
 
@@ -110,254 +106,246 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
+// NY FUNKTION: Konverterar ljud till 16kHz Mono WAV för Whisper.cpp
+const convertTo16kHzMonoWav = async (audioBlob: Blob): Promise<Blob> => {
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+  const arrayBuffer = await audioBlob.arrayBuffer();
+  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+  const channelData = audioBuffer.getChannelData(0); // Tvinga mono (1 kanal)
+  const length = channelData.length * 2 + 44;
+  const buffer = new ArrayBuffer(length);
+  const view = new DataView(buffer);
+
+  let pos = 0;
+  const setUint16 = (data: number) => { view.setUint16(pos, data, true); pos += 2; };
+  const setUint32 = (data: number) => { view.setUint32(pos, data, true); pos += 4; };
+  const writeString = (s: string) => { for (let i = 0; i < s.length; i++) { view.setUint8(pos, s.charCodeAt(i)); pos++; } };
+
+  writeString('RIFF'); setUint32(length - 8);
+  writeString('WAVE'); writeString('fmt ');
+  setUint32(16); setUint16(1); setUint16(1);
+  setUint32(16000); setUint32(16000 * 2); setUint16(2); setUint16(16);
+  writeString('data'); setUint32(length - pos - 4);
+
+  for (let i = 0; i < channelData.length; i++) {
+    let sample = Math.max(-1, Math.min(1, channelData[i]));
+    sample = sample < 0 ? sample * 32768 : sample * 32767;
+    view.setInt16(pos, sample, true);
+    pos += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+};
+
 const getAIClient = () => {
   const apiKey = localStorage.getItem('GEMINI_API_KEY');
-  if (!apiKey) return null;
-  return new GoogleGenAI({ apiKey });
+  return apiKey ? new GoogleGenAI({ apiKey }) : null;
 };
-
 export const hasApiKey = () => !!localStorage.getItem('GEMINI_API_KEY');
+const getModelName = () => (localStorage.getItem('GEMINI_MODEL') === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash');
 
-const getModelName = () => {
-  const model = localStorage.getItem('GEMINI_MODEL') || 'flash';
-  return model === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
-};
+const runLMStudioWhisper = async (audioBlob: Blob, onProgress?: (p: number, msg: string) => void): Promise<string> => {
+  onProgress?.(20, "Konverterar ljud...");
+  
+  // 1. Konvertera till WAV (Krävs för whisper.cpp)
+  const wavBlob = await convertTo16kHzMonoWav(audioBlob);
 
-// ------------------------------------------------------------------
-// 1. TRANSKRIBERA (Väljer mellan API och Lokal motor)
-// ------------------------------------------------------------------
-const transcribeSchema = {
-  type: Type.OBJECT,
-  properties: {
-    text: { type: Type.STRING, description: "Den exakta transkriberingen av vad som sades." }
+  // 2. Hämta URL exakt som den står i appen
+  const rawUrl = localStorage.getItem('WHISPER_SERVER_URL') || '';
+  const SERVER_URL = rawUrl.trim();
+  const language = localStorage.getItem('TRANSCRIPTION_LANG') || 'sv';
+
+  if (!SERVER_URL) throw new Error("Ingen URL angiven för Whisper i inställningar.");
+
+  // 3. Bygg FormData för whisper.cpp
+  const formData = new FormData();
+  formData.append("file", wavBlob, "recording.wav");
+  
+  if (language && language !== "") {
+    formData.append("language", language);
+    // Skicka med prompt för att styra språket
+    const prompt = language === 'sv' ? "Hej, här är en svensk dagbok." : "Hello, this is an English diary.";
+    formData.append("prompt", prompt);
+  }
+
+  try {
+    onProgress?.(50, `Ansluter till ${SERVER_URL}...`);
+    
+    const response = await fetch(SERVER_URL, {
+      method: "POST",
+      body: formData // Webbläsaren sköter Content-Type automatiskt
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Serverfel ${response.status}: ${errorText}`);
+    }
+
+    onProgress?.(90, "Tolkar svar...");
+    const data = await response.json();
+    
+    // whisper.cpp server returnerar oftast text i fältet "text"
+    return data.text || "";
+
+  } catch (err: any) {
+    // Här skickar vi vidare det RIKTIGA felet så du ser det i dagboken
+    throw new Error(`${err.message}`);
   }
 };
 
+// ------------------------------------------------------------------
+// 1. TRANSKRIBERA (Väljer mellan Whisper, Lokal och API)
+// ------------------------------------------------------------------
 export const transcribeEntryAI = async (entryId: string, onProgress?: (p: number, msg: string) => void) => {
   const mode = localStorage.getItem('TRANSCRIPTION_MODE') || 'api';
   const entry = await getEntry(entryId);
 
-  if (!entry) throw new Error("Inlägg saknas.");
+  if (!entry) throw new Error("Inlägg saknas i databasen.");
 
-  // NYTT: Om inlägget redan har transkriberats live (Lokalt mode), hoppa över API-steget!
+  // Om inlägget redan har transkriberats live
   if (entry.isTranscribed && entry.transcription) {
     onProgress?.(100, 'Klar (Lokal)');
     return { text: entry.transcription };
   }
 
-  // Om den var inställd på lokal, men ingen text kom in (t.ex. knäpptyst eller fel på micken)
+  onProgress?.(5, "Hämtar ljudfil...");
+  const audio = await getEntryAudio(entryId);
+  if (!audio) throw new Error("Kunde inte hitta ljudfilen.");
+
+  // --- HÄR ÄR LOGIKEN FÖR WHISPER ---
+  if (mode === 'lmstudio') {
+    try {
+      const transcriptionText = await runLMStudioWhisper(audio.blob, onProgress);
+      await updateEntry(entryId, { transcription: transcriptionText, isTranscribed: true });
+      return { text: transcriptionText };
+    } catch (error: any) {
+      // Sparar felmeddelandet som text i inlägget
+      const errorMsg = `[WHISPER FEL: ${error.message}]`;
+      await updateEntry(entryId, { transcription: errorMsg, isTranscribed: true });
+      return { text: errorMsg };
+    }
+  }
+
+  // --- OM DEN STÅR PÅ NATIVE C++ ---
   if (mode === 'local') {
     await updateEntry(entryId, { transcription: "Inget tal registrerades av den lokala röstmotorn.", isTranscribed: true });
     return { text: "" };
   }
 
-  // Molnbaserad transkribering via Gemini API
+  // --- FALLBACK: Molnbaserad transkribering via Gemini API ---
+  onProgress?.(20, "Förbereder fil för molnet...");
   const ai = getAIClient();
-  const audio = await getEntryAudio(entryId);
-  if (!ai) throw new Error("API-nyckel saknas.");
-  if (!audio) throw new Error("Ljud saknas.");
+  if (!ai) throw new Error("API-nyckel saknas för transkribering.");
 
-  onProgress?.(20, 'Förbereder ljudfil...');
   const base64Audio = await blobToBase64(audio.blob);
-  const prompt = `Du är en expert på att transkribera svenskt tal. Lyssna på denna röstanteckning och skriv ner exakt vad som sägs. Din output ska endast vara den transkriberade texten. Lägg inte till kommentarer.`;
+  onProgress?.(50, "Skickar till Gemini API...");
 
-  onProgress?.(40, 'Transkriberar via API...');
   const result = await ai.models.generateContent({
     model: getModelName(),
-    contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: audio.mimeType, data: base64Audio } }] }],
-    config: { responseMimeType: "application/json", responseSchema: transcribeSchema }
+    contents: [{ parts: [{ text: "Transkribera talet exakt." }, { inlineData: { mimeType: audio.mimeType, data: base64Audio } }] }]
   });
-  const responseData = JSON.parse(result.text || "{}");
-  const transcriptionText = responseData.text || "";
-
-  await updateEntry(entryId, { transcription: transcriptionText, isTranscribed: true });
-  return { text: transcriptionText };
+  
+  onProgress?.(90, "Sparar resultat...");
+  const text = result.text || "";
+  await updateEntry(entryId, { transcription: text, isTranscribed: true });
+  return { text };
 };
 
 // ------------------------------------------------------------------
-// 2. SAMMANFATTA DAGEN (Uppdaterad för Llama-3 WebLLM)
+// 2. SAMMANFATTA DAGEN
 // ------------------------------------------------------------------
-const summarizeSchema = {
-  type: Type.OBJECT,
-  properties: {
-    summary: { type: Type.STRING, description: "En varm, empatisk och reflekterande dagbokssammanfattning." },
-    mood: { type: Type.STRING, description: "En enda emoji som bäst sammanfattar dagens känsla." },
-    learnings: { type: Type.ARRAY, items: { type: Type.STRING }, description: "1-3 korta lärdomar eller insikter från dagen." },
-    peopleMentioned: { type: Type.ARRAY, items: { type: Type.STRING }, description: "En lista med förnamn på personer som nämnts i inläggen (t.ex. 'Alicia', 'Daniel')." },
-    tagsMentioned: { type: Type.ARRAY, items: { type: Type.STRING }, description: "En lista med 1-4 korta generella ämnen/platser som nämnts (t.ex. 'Badhuset', 'Lekparken', 'Jobb')." }
-  }
-};
-
-export const summarizeDayAI = async (dayId: string, onProgress?: (p: number, msg: string) => void) => {
+export const summarizeDayAI = async (dayId: string, onProgress?: any) => {
   const mode = localStorage.getItem('SUMMARY_MODE') || 'api';
+  const param = getConfig('summary');
   const day = await getDay(dayId);
   const entries = await getEntriesForDay(dayId);
+  if (!day || entries.length === 0) throw new Error("Ingen data.");
 
-  if (!day || entries.length === 0) throw new Error("Ingen data för denna dag.");
-
-  onProgress?.(20, 'Läser dagens inlägg...');
-
-  const transcriptions = entries
-    .filter(e => e.isTranscribed && e.transcription)
-    .map(e => `[${new Date(e.createdAt).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}] ${e.transcription}`)
-    .join('\n\n');
-
+  const transcriptions = entries.filter(e => e.isTranscribed && e.transcription).map(e => e.transcription).join('\n\n');
   const customPrompt = localStorage.getItem('GEMINI_PROMPT') || DEFAULT_DIARY_PROMPT;
-  const qaText = day.qa?.map(q => `- Fråga: ${q.question}\n  Svar: ${q.answer}`).join('\n\n') || "";
-  
-  const userData = `Inlägg:\n${transcriptions}\n\nFrågor och svar:\n${qaText}`;
 
-  let responseData;
-
-  if (mode === 'nano') {
-    onProgress?.(20, 'Anropar Native Gemini Nano...');
-    try {
-      // Detta anropar koden i din GeminiNanoPlugin.java
-      const result = await GeminiNano.generateText({
-        systemPrompt: customPrompt,
-        prompt: userData
-      });
-      
-      // Din Java-kod skickar just nu tillbaka en mockad JSON
-      responseData = JSON.parse(result.text); 
-    } catch (err: any) {
-      throw new Error("Nano-plugin misslyckades: " + err.message);
-    }
-
+  let raw = "";
+  if (mode === 'lmstudio') {
+    const sysSum = localStorage.getItem('LM_SYS_SUMMARY') || 'Svara med JSON.';
+    raw = await runLMStudio(sysSum, `${customPrompt}\n\nAnteckningar:\n${transcriptions}`, param.temp, param.maxTokens, onProgress);
   } else if (mode === 'local') {
-    const systemPrompt = `${customPrompt}\n\nVIKTIGT: Du MÅSTE svara med ett giltigt JSON-objekt exakt enligt detta schema:
-    {
-      "summary": "Din sammanfattning här",
-      "mood": "En passande emoji",
-      "learnings": ["Lärdom 1", "Lärdom 2"],
-      "peopleMentioned": ["Namn 1"],
-      "tagsMentioned": ["Tagg 1"]
-    }`;
-
-    const localResult = await runLocalLlama(systemPrompt, userData, onProgress);
-    
-    const jsonMatch = localResult.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Den lokala modellen returnerade inte giltig JSON.");
-    
-    responseData = JSON.parse(jsonMatch[0]);
-
+    raw = await runLocalLlama(customPrompt, transcriptions, param.temp, param.maxTokens, onProgress);
   } else {
-    onProgress?.(50, 'Sammanfattar via Gemini API...');
     const ai = getAIClient();
-    if (!ai) throw new Error("API-nyckel saknas.");
-    const fullPrompt = `${customPrompt}\n\n${userData}\n\nSvara i JSON-format.`;
-    const result = await ai.models.generateContent({
+    const res = await ai!.models.generateContent({
       model: getModelName(),
-      contents: [{ parts: [{ text: fullPrompt }] }],
-      config: { responseMimeType: "application/json", responseSchema: summarizeSchema }
+      contents: [{ parts: [{ text: `${customPrompt}\n\n${transcriptions}` }] }],
+      config: { responseMimeType: "application/json" }
     });
-    responseData = JSON.parse(result.text || "{}");
+    raw = res.text || "{}";
   }
 
-  onProgress?.(80, 'Sparar taggar och personer...');
-
-  const allPeople = await db.people.toArray();
-  const allTags = await db.tags.toArray();
-  const personIdsToSave: string[] = [];
-  const tagIdsToSave: string[] = [];
-
-  if (responseData.peopleMentioned) {
-    for (const name of responseData.peopleMentioned) {
-      let person = allPeople.find(p => p.name.toLowerCase() === name.toLowerCase());
-      if (!person) {
-        person = { id: crypto.randomUUID(), name, role: 'Vän/Familj', projectIds: [] };
-        await db.people.add(person);
-      }
-      personIdsToSave.push(person.id);
-    }
-  }
-
-  if (responseData.tagsMentioned) {
-    for (const tagName of responseData.tagsMentioned) {
-      let tag = allTags.find(t => t.name.toLowerCase() === tagName.toLowerCase());
-      if (!tag) {
-        tag = { id: crypto.randomUUID(), name: tagName, projectId: 'dagbok' };
-        await db.tags.add(tag);
-      }
-      tagIdsToSave.push(tag.id);
-    }
-  }
-
-  onProgress?.(90, 'Sparar dagboken...');
+  // Försök hitta JSON inuti svaret
+  const jsonStr = extractJson(raw, '{', '}');
+  if (!jsonStr) throw new Error("JSON saknas i svaret från servern.");
+  
+  const responseData = JSON.parse(jsonStr);
 
   await updateDay(dayId, {
-    summary: responseData.summary || "",
-    mood: responseData.mood || "",
-    learnings: responseData.learnings || [],
-    personIds: personIdsToSave,
-    tagIds: tagIdsToSave,
+    summary: responseData.summary || responseData.summering || "",
+    mood: responseData.mood || responseData.humör || "",
+    learnings: responseData.learnings || responseData.inlärningar || [],
     summarizedAt: new Date().toISOString()
   });
-
   return responseData;
 };
 
-// Stubs för gamla mötesvyer
-export const processMeetingAI = async (_meetingId: string, _onProgress?: (p: number, msg: string) => void) => {
-  throw new Error("Mötes-AI är ersatt av dagboks-AI. Använd dagvy istället.");
-};
-export const reprocessMeetingFromText = async (_meetingId: string, _onProgress?: (p: number, msg: string) => void) => {
-  throw new Error("Mötes-AI är ersatt av dagboks-AI. Använd dagvy istället.");
-};
-
 // ------------------------------------------------------------------
-// 3. GENERERA FRÅGOR & SVAR (Uppdaterad för Llama-3 WebLLM)
+// 3. GENERERA FRÅGOR & SVAR 
 // ------------------------------------------------------------------
-const questionsSchema = {
-  type: Type.OBJECT,
-  properties: {
-    questions: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING }, 
-      description: "2-3 öppna och reflekterande frågor baserat på dagens inlägg." 
-    }
-  }
-};
-
-export const generateQuestionsAI = async (dayId: string, onProgress?: (p: number, msg: string) => void) => {
+export const generateQuestionsAI = async (dayId: string, onProgress?: any) => {
   const mode = localStorage.getItem('SUMMARY_MODE') || 'api';
-  const day = await getDay(dayId);
+  const param = getConfig('questions');
   const entries = await getEntriesForDay(dayId);
+  const transcriptions = entries.filter(e => e.isTranscribed).map(e => e.transcription).join('\n\n');
+  const customPrompt = localStorage.getItem('GEMINI_QUESTIONS_PROMPT') || DEFAULT_QUESTIONS_PROMPT;
 
-  if (!day || entries.length === 0) throw new Error("Ingen data för denna dag.");
-
-  const transcriptions = entries
-    .filter(e => e.isTranscribed && e.transcription)
-    .map(e => e.transcription)
-    .join('\n\n');
-
-  const customQuestionsPrompt = localStorage.getItem('GEMINI_QUESTIONS_PROMPT') || DEFAULT_QUESTIONS_PROMPT;
-
-  let questions: string[] = [];
-
-  if (mode === 'local') {
-    const systemPrompt = `${customQuestionsPrompt}\n\nVIKTIGT: Du MÅSTE svara med en JSON-lista med 2-3 strängar. Exempel:
-    ["Varför kändes det så?", "Vad kunde du ha gjort annorlunda?"]`;
-
-    const localResult = await runLocalLlama(systemPrompt, transcriptions, onProgress);
-    
-    const jsonMatch = localResult.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error("Den lokala modellen returnerade inte en giltig JSON-lista.");
-    
-    questions = JSON.parse(jsonMatch[0]);
-
+  let raw = "";
+  if (mode === 'lmstudio') {
+    const sys = localStorage.getItem('LM_SYS_QUESTIONS') || 'Svara med en JSON-lista.';
+    raw = await runLMStudio(sys, `${customPrompt}\n\nAnteckningar:\n${transcriptions}`, param.temp, param.maxTokens, onProgress);
+  } else if (mode === 'local') {
+    raw = await runLocalLlama(customPrompt, transcriptions, param.temp, param.maxTokens, onProgress);
   } else {
-    onProgress?.(50, 'Genererar frågor via Gemini API...');
     const ai = getAIClient();
-    if (!ai) throw new Error("API-nyckel saknas.");
-    const result = await ai.models.generateContent({
+    const res = await ai!.models.generateContent({
       model: getModelName(),
-      contents: [{ parts: [{ text: `${customQuestionsPrompt}\n\nInlägg:\n${transcriptions}` }] }],
-      config: { responseMimeType: "application/json", responseSchema: questionsSchema }
+      contents: [{ parts: [{ text: `${customPrompt}\n\n${transcriptions}` }] }]
     });
-    const responseData = JSON.parse(result.text || "{}");
-    questions = responseData.questions || [];
+    raw = res.text || "[]";
   }
 
-  return questions;
+  // 1. Försök hitta JSON-array [...]
+  const jsonArrStr = extractJson(raw, '[', ']');
+  if (jsonArrStr) {
+    try {
+      const arr = JSON.parse(jsonArrStr);
+      if (Array.isArray(arr)) return arr;
+    } catch (e) { /* Gå vidare till fallback */ }
+  }
+
+  // 2. FALLBACK: Om AI:n skickade en numrerad lista (1. Fråga, 2. Fråga)
+  const lines = raw.split('\n')
+    .map(line => line.replace(/^\d+[\.\)]\s*/, '').trim())
+    .filter(line => line.length > 5 && line.includes('?')); 
+
+  if (lines.length > 0) {
+    return lines.slice(0, 3);
+  }
+
+  throw new Error("Kunde inte tolka frågorna. AI:n skickade varken JSON eller en tydlig lista.");
+};
+
+export const processMeetingAI = async (_meetingId: string, _onProgress?: any) => {
+  throw new Error("Mötes-AI är ersatt av dagboks-AI.");
+};
+
+export const reprocessMeetingFromText = async (_meetingId: string, _onProgress?: any) => {
+  throw new Error("Mötes-AI är ersatt av dagboks-AI.");
 };

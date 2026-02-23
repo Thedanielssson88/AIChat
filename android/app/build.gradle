@@ -41,10 +41,11 @@ dependencies {
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
 
-    // Rätt version för att ladda ner Googles AI Edge SDK
-    implementation("com.google.ai.edge.aicore:aicore:0.0.1-exp01")
-    implementation("com.google.guava:guava:31.0.1-android")
-    implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
+    // Rätt bibliotek för Gemini Nano via ML Kit
+    implementation("com.google.mlkit:genai-summarization:1.0.0-beta1")
+    
+    // Guava behövs för att hantera Task-objekten i Java
+    implementation("com.google.guava:guava:31.1-android")
 }
 
 apply from: 'capacitor.build.gradle'

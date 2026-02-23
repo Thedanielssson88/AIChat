@@ -1,6 +1,14 @@
 {
-  "appId": "com.dagbok.app",
+  "appId": "com.motesapp.app",
   "appName": "Dagboksapp",
   "webDir": "dist",
-  "bundledWebRuntime": false
+  "bundledWebRuntime": false,
+  "server": {
+    "cleartext": true
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
 }

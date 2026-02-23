@@ -117,7 +117,8 @@ export interface Day {
   personIds?: string[];
   /** Taggar/ämnen som AI:n hittat (platser, aktiviteter) */
   tagIds?: string[];
-  qa?: { question: string; answer: string }[]; // <-- LÄGG TILL DENNA
+  qa?: { question: string; answer: string }[];
+  questions?: string[];
 }
 
 /** Ett röstinlägg (en inspelning) som tillhör en specifik dag. */

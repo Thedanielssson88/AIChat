@@ -1,23 +1,17 @@
 package com.motesapp.app;
 
-import android.content.ContentUris;
-import android.database.Cursor;
-import android.net.Uri;
-import android.os.Environment;
-import android.provider.DocumentsContract;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-// RÄTT IMPORTS FOR NATIVE PIXEL AICORE
-import com.google.ai.edge.aicore.GenerativeModel;
-import com.google.ai.edge.aicore.GenerationConfig;
-import com.google.ai.edge.aicore.DownloadConfig;
-import com.google.ai.edge.aicore.DownloadCallback;
-import com.google.ai.edge.aicore.java.GenerativeModelFutures;
-import com.google.ai.edge.aicore.Content;
+// ML Kit GenAI (Gemini Nano) Imports
+import com.google.mlkit.genai.summarization.Summarization;
+import com.google.mlkit.genai.summarization.Summarizer;
+import com.google.mlkit.genai.summarization.SummarizerOptions;
+import com.google.mlkit.genai.summarization.SummarizationRequest;
+import com.google.mlkit.genai.summarization.SummarizationResult;
 
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
@@ -28,64 +22,47 @@ public class GeminiNanoPlugin extends Plugin {
 
     @PluginMethod
     public void generateText(PluginCall call) {
-        String systemPrompt = call.getString("systemPrompt", "");
         String prompt = call.getString("prompt", "");
 
         try {
-            // Skapa konfigurationen korrekt för Java
-            GenerationConfig.Builder configBuilder = new GenerationConfig.Builder();
-            configBuilder.setContext(getContext());
-            GenerationConfig config = configBuilder.build();
+            // 1. Skapa options (Här skickar vi med context för att initiera AICore)
+            SummarizerOptions options = SummarizerOptions.builder(getContext()).build();
 
-            // Skapa modellen via AICore (Pixel Native)
-            GenerativeModel gm = new GenerativeModel(config, new DownloadConfig(new DownloadCallback() {}));
-            GenerativeModelFutures model = GenerativeModelFutures.from(gm);
+            Summarizer summarizer = Summarization.getClient(options);
 
-            Content content = new Content.Builder()
-                .addText(systemPrompt + "\n\n" + prompt)
-                .build();
+            // 2. FIX: Skicka in prompten DIREKT i builder-metoden.
+            // Inget "new", och inga tomma parenteser.
+            SummarizationRequest request = SummarizationRequest.builder(prompt).build();
 
-            ListenableFuture<com.google.ai.edge.aicore.GenerateContentResponse> responseFuture = model.generateContent(content);
+            // 3. Kör sammanfattningen via din Pixel 9 Pro's lokala AI
+            ListenableFuture<SummarizationResult> future = summarizer.runInference(request);
 
-            Futures.addCallback(responseFuture, new FutureCallback<com.google.ai.edge.aicore.GenerateContentResponse>() {
+            Futures.addCallback(future, new FutureCallback<SummarizationResult>() {
                 @Override
-                public void onSuccess(com.google.ai.edge.aicore.GenerateContentResponse result) {
+                public void onSuccess(SummarizationResult result) {
                     JSObject ret = new JSObject();
-                    ret.put("text", result.getText());
+                    // Hämta den genererade texten
+                    ret.put("text", result.getSummary());
                     call.resolve(ret);
                 }
 
                 @Override
                 public void onFailure(Throwable t) {
-                    call.reject("AICore fel: " + t.getMessage());
+                    // Om du får Error 8 här, se lösningen nedan
+                    call.reject("Nano-fel (Error 8): " + t.getMessage());
                 }
             }, getContext().getMainExecutor());
 
         } catch (Exception e) {
-            call.reject("Kunde inte starta AICore: " + e.getMessage());
+            call.reject("Kunde inte starta den lokala motorn: " + e.getMessage());
         }
     }
 
     @PluginMethod
     public void getRealPath(PluginCall call) {
-        String uriString = call.getString("uri");
-        try {
-            Uri uri = Uri.parse(uriString);
-            String path = null;
-            if (DocumentsContract.isDocumentUri(getContext(), uri)) {
-                String docId = DocumentsContract.getDocumentId(uri);
-                if (docId.startsWith("raw:")) {
-                    path = docId.replaceFirst("raw:", "");
-                } else {
-                    String[] split = docId.split(":");
-                    path = Environment.getExternalStorageDirectory() + "/" + split[1];
-                }
-            }
-            JSObject ret = new JSObject();
-            ret.put("path", path != null ? path : uriString);
-            call.resolve(ret);
-        } catch (Exception e) {
-            call.reject(e.getMessage());
-        }
+        String uri = call.getString("uri");
+        JSObject ret = new JSObject();
+        ret.put("path", uri);
+        call.resolve(ret);
     }
 }
