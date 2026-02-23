@@ -1,20 +1,13 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { initLlama } from 'llama-cpp-capacitor';
 import { registerPlugin } from '@capacitor/core';
-import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 
 interface GeminiNanoPlugin {
   generateText(options: { systemPrompt: string, prompt: string }): Promise<{ text: string }>;
   getRealPath(options: { uri: string }): Promise<{ path: string }>;
 }
 const GeminiNano = registerPlugin<GeminiNanoPlugin>('GeminiNano');
-import { db, getEntry, getEntryAudio, getDay, getEntriesForDay, updateEntry, updateDay } from "./db";
-
-export const DEFAULT_DIARY_PROMPT = `Du är en expert på att skriva personliga dagboksinlägg. 
-Din uppgift är att skriva ett sammanhängande och reflekterande dagboksinlägg baserat på mina röstanteckningar. 
-Skriv i JAG-form. Fånga mina känslor, vad jag har gjort och vilka jag har träffat.`;
-
-export const DEFAULT_QUESTIONS_PROMPT = `Du är min personliga AI-coach och dagbok. Din uppgift är att ställa 2-3 öppna, reflekterande frågor till mig i "du"-form baserat på mina anteckningar.`;
+import { getEntry, getEntryAudio, getDay, getEntriesForDay, updateEntry, updateDay } from "./db";
 
 // Hjälpmetod för att extrahera JSON
 const extractJson = (text: string, startChar: '{' | '[', endChar: '}' | ']') => {
@@ -85,7 +78,6 @@ const runLMStudio = async (system: string, prompt: string, temp: number, max: nu
 
     const data = await response.json();
     
-    // Säkerställ att data.choices och data.choices[0] existerar innan vi läser dem!
     if (data && data.choices && data.choices.length > 0 && data.choices[0].message) {
         return data.choices[0].message.content || "";
     } else {
@@ -106,13 +98,12 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-// NY FUNKTION: Konverterar ljud till 16kHz Mono WAV för Whisper.cpp
 const convertTo16kHzMonoWav = async (audioBlob: Blob): Promise<Blob> => {
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
   const arrayBuffer = await audioBlob.arrayBuffer();
   const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
-  const channelData = audioBuffer.getChannelData(0); // Tvinga mono (1 kanal)
+  const channelData = audioBuffer.getChannelData(0);
   const length = channelData.length * 2 + 44;
   const buffer = new ArrayBuffer(length);
   const view = new DataView(buffer);
@@ -147,34 +138,27 @@ const getModelName = () => (localStorage.getItem('GEMINI_MODEL') === 'pro' ? 'ge
 
 const runLMStudioWhisper = async (audioBlob: Blob, onProgress?: (p: number, msg: string) => void): Promise<string> => {
   onProgress?.(20, "Konverterar ljud...");
-  
-  // 1. Konvertera till WAV (Krävs för whisper.cpp)
   const wavBlob = await convertTo16kHzMonoWav(audioBlob);
-
-  // 2. Hämta URL exakt som den står i appen
   const rawUrl = localStorage.getItem('WHISPER_SERVER_URL') || '';
   const SERVER_URL = rawUrl.trim();
   const language = localStorage.getItem('TRANSCRIPTION_LANG') || 'sv';
 
   if (!SERVER_URL) throw new Error("Ingen URL angiven för Whisper i inställningar.");
 
-  // 3. Bygg FormData för whisper.cpp
   const formData = new FormData();
   formData.append("file", wavBlob, "recording.wav");
   
   if (language && language !== "") {
     formData.append("language", language);
-    // Skicka med prompt för att styra språket
     const prompt = language === 'sv' ? "Hej, här är en svensk dagbok." : "Hello, this is an English diary.";
     formData.append("prompt", prompt);
   }
 
   try {
     onProgress?.(50, `Ansluter till ${SERVER_URL}...`);
-    
     const response = await fetch(SERVER_URL, {
       method: "POST",
-      body: formData // Webbläsaren sköter Content-Type automatiskt
+      body: formData
     });
 
     if (!response.ok) {
@@ -184,18 +168,14 @@ const runLMStudioWhisper = async (audioBlob: Blob, onProgress?: (p: number, msg:
 
     onProgress?.(90, "Tolkar svar...");
     const data = await response.json();
-    
-    // whisper.cpp server returnerar oftast text i fältet "text"
     return data.text || "";
-
   } catch (err: any) {
-    // Här skickar vi vidare det RIKTIGA felet så du ser det i dagboken
     throw new Error(`${err.message}`);
   }
 };
 
 // ------------------------------------------------------------------
-// 1. TRANSKRIBERA (Väljer mellan Whisper, Lokal och API)
+// 1. TRANSKRIBERA
 // ------------------------------------------------------------------
 export const transcribeEntryAI = async (entryId: string, onProgress?: (p: number, msg: string) => void) => {
   const mode = localStorage.getItem('TRANSCRIPTION_MODE') || 'api';
@@ -203,7 +183,6 @@ export const transcribeEntryAI = async (entryId: string, onProgress?: (p: number
 
   if (!entry) throw new Error("Inlägg saknas i databasen.");
 
-  // Om inlägget redan har transkriberats live
   if (entry.isTranscribed && entry.transcription) {
     onProgress?.(100, 'Klar (Lokal)');
     return { text: entry.transcription };
@@ -213,27 +192,18 @@ export const transcribeEntryAI = async (entryId: string, onProgress?: (p: number
   const audio = await getEntryAudio(entryId);
   if (!audio) throw new Error("Kunde inte hitta ljudfilen.");
 
-  // --- HÄR ÄR LOGIKEN FÖR WHISPER ---
   if (mode === 'lmstudio') {
     try {
       const transcriptionText = await runLMStudioWhisper(audio.blob, onProgress);
       await updateEntry(entryId, { transcription: transcriptionText, isTranscribed: true });
       return { text: transcriptionText };
     } catch (error: any) {
-      // Sparar felmeddelandet som text i inlägget
       const errorMsg = `[WHISPER FEL: ${error.message}]`;
       await updateEntry(entryId, { transcription: errorMsg, isTranscribed: true });
       return { text: errorMsg };
     }
   }
 
-  // --- OM DEN STÅR PÅ NATIVE C++ ---
-  if (mode === 'local') {
-    await updateEntry(entryId, { transcription: "Inget tal registrerades av den lokala röstmotorn.", isTranscribed: true });
-    return { text: "" };
-  }
-
-  // --- FALLBACK: Molnbaserad transkribering via Gemini API ---
   onProgress?.(20, "Förbereder fil för molnet...");
   const ai = getAIClient();
   if (!ai) throw new Error("API-nyckel saknas för transkribering.");
@@ -263,7 +233,7 @@ export const summarizeDayAI = async (dayId: string, onProgress?: any) => {
   if (!day || entries.length === 0) throw new Error("Ingen data.");
 
   const transcriptions = entries.filter(e => e.isTranscribed && e.transcription).map(e => e.transcription).join('\n\n');
-  const customPrompt = localStorage.getItem('GEMINI_PROMPT') || DEFAULT_DIARY_PROMPT;
+  const customPrompt = localStorage.getItem('GEMINI_PROMPT') || "Sammanfatta dagen.";
 
   let raw = "";
   if (mode === 'lmstudio') {
@@ -275,16 +245,13 @@ export const summarizeDayAI = async (dayId: string, onProgress?: any) => {
     const ai = getAIClient();
     const res = await ai!.models.generateContent({
       model: getModelName(),
-      contents: [{ parts: [{ text: `${customPrompt}\n\n${transcriptions}` }] }],
-      config: { responseMimeType: "application/json" }
+      contents: [{ parts: [{ text: `${customPrompt}\n\n${transcriptions}` }] }]
     });
     raw = res.text || "{}";
   }
 
-  // Försök hitta JSON inuti svaret
   const jsonStr = extractJson(raw, '{', '}');
   if (!jsonStr) throw new Error("JSON saknas i svaret från servern.");
-  
   const responseData = JSON.parse(jsonStr);
 
   await updateDay(dayId, {
@@ -304,7 +271,7 @@ export const generateQuestionsAI = async (dayId: string, onProgress?: any) => {
   const param = getConfig('questions');
   const entries = await getEntriesForDay(dayId);
   const transcriptions = entries.filter(e => e.isTranscribed).map(e => e.transcription).join('\n\n');
-  const customPrompt = localStorage.getItem('GEMINI_QUESTIONS_PROMPT') || DEFAULT_QUESTIONS_PROMPT;
+  const customPrompt = localStorage.getItem('GEMINI_QUESTIONS_PROMPT') || "Ställ frågor.";
 
   let raw = "";
   if (mode === 'lmstudio') {
@@ -321,25 +288,20 @@ export const generateQuestionsAI = async (dayId: string, onProgress?: any) => {
     raw = res.text || "[]";
   }
 
-  // 1. Försök hitta JSON-array [...]
   const jsonArrStr = extractJson(raw, '[', ']');
   if (jsonArrStr) {
     try {
       const arr = JSON.parse(jsonArrStr);
       if (Array.isArray(arr)) return arr;
-    } catch (e) { /* Gå vidare till fallback */ }
+    } catch (e) {}
   }
 
-  // 2. FALLBACK: Om AI:n skickade en numrerad lista (1. Fråga, 2. Fråga)
   const lines = raw.split('\n')
     .map(line => line.replace(/^\d+[\.\)]\s*/, '').trim())
     .filter(line => line.length > 5 && line.includes('?')); 
 
-  if (lines.length > 0) {
-    return lines.slice(0, 3);
-  }
-
-  throw new Error("Kunde inte tolka frågorna. AI:n skickade varken JSON eller en tydlig lista.");
+  if (lines.length > 0) return lines.slice(0, 3);
+  throw new Error("Kunde inte tolka frågorna.");
 };
 
 export const processMeetingAI = async (_meetingId: string, _onProgress?: any) => {
@@ -348,4 +310,63 @@ export const processMeetingAI = async (_meetingId: string, _onProgress?: any) =>
 
 export const reprocessMeetingFromText = async (_meetingId: string, _onProgress?: any) => {
   throw new Error("Mötes-AI är ersatt av dagboks-AI.");
+};
+
+// ------------------------------------------------------------------
+// 4. CHATT-FUNKTIONER (NY!)
+// ------------------------------------------------------------------
+
+export const transcribeBlobAI = async (blob: Blob, onProgress?: (p: number, msg: string) => void): Promise<string> => {
+  const mode = localStorage.getItem('TRANSCRIPTION_MODE') || 'api';
+  
+  if (mode === 'lmstudio') {
+    return await runLMStudioWhisper(blob, onProgress);
+  } else if (mode === 'api') {
+    onProgress?.(20, "Förbereder ljud för molnet...");
+    const ai = getAIClient();
+    if (!ai) throw new Error("API-nyckel saknas för transkribering.");
+    
+    const base64Audio = await blobToBase64(blob);
+    onProgress?.(50, "Skickar till Gemini API...");
+    
+    const result = await ai.models.generateContent({
+      model: getModelName(),
+      contents: [{ parts: [{ text: "Transkribera talet exakt." }, { inlineData: { mimeType: blob.type, data: base64Audio } }] }]
+    });
+    return result.text || "";
+  }
+  return "Kunde inte transkribera. Stöds inte i detta läge.";
+};
+
+export const sendChatMessageAI = async (messages: { role: 'user' | 'assistant', content: string }[], onProgress?: any) => {
+  const mode = localStorage.getItem('SUMMARY_MODE') || 'api';
+  const temp = Number(localStorage.getItem('CHAT_TEMP') || 0.7);
+  const maxTokens = Number(localStorage.getItem('CHAT_MAX_TOKENS') || 1500);
+  const systemInstruction = localStorage.getItem('CHAT_SYSTEM_PROMPT') || "Du är en hjälpsam, vänlig och intelligent AI-assistent. Svara naturligt och kortfattat på användarens frågor.";
+
+  if (mode === 'lmstudio') {
+    const baseUrl = localStorage.getItem('LLM_SERVER_URL') || 'http://100.64.204.100:1234/v1';
+    const formattedMessages = [{ role: 'system', content: systemInstruction }, ...messages];
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: formattedMessages, temperature: temp, max_tokens: maxTokens })
+    });
+    if (!response.ok) throw new Error(`Server svarade med status: ${response.status}`);
+    const data = await response.json();
+    return data.choices[0].message.content || "";
+  } else {
+    const ai = getAIClient();
+    if (!ai) throw new Error("API-nyckel saknas. Gå till Inställningar och lägg in en.");
+    const chatPrompt = messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n') + '\n\nAssistant:';
+    const result = await ai.models.generateContent({
+      model: getModelName(),
+      config: {
+        temperature: temp,
+        maxOutputTokens: maxTokens
+      },
+      contents: [{ parts: [{ text: `${systemInstruction}\n\n${chatPrompt}` }] }]
+    });
+    return result.text || "";
+  }
 };

@@ -140,3 +140,18 @@ export interface EntryAudio {
   blob: Blob;
   mimeType: string;
 }
+
+export interface Chat {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  chatId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}

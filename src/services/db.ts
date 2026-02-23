@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import { Meeting, Person, Task, AudioFile, Project, CategoryData, ProjectMember, Tag, ProcessingJob, MemberGroup, Day, Entry, EntryAudio } from '../types';
+import { Meeting, Person, Task, AudioFile, Project, CategoryData, ProjectMember, Tag, ProcessingJob, MemberGroup, Day, Entry, EntryAudio, Chat, ChatMessage } from '../types';
 
 export class MeetingDB extends Dexie {
   meetings!: Table<Meeting, string>;
@@ -13,7 +13,9 @@ export class MeetingDB extends Dexie {
   processingJobs!: Table<ProcessingJob, string>;
   days!: Table<Day, string>;
   entries!: Table<Entry, string>;
-  entryAudio!: Table<EntryAudio, string>; 
+  entryAudio!: Table<EntryAudio, string>;
+  chats!: Table<Chat, string>;
+  chatMessages!: Table<ChatMessage, string>;
 
   constructor() {
     super('RecallCRM');
@@ -50,6 +52,12 @@ export class MeetingDB extends Dexie {
       days: 'id, date',
       entries: 'id, dayId, createdAt',
       entryAudio: 'id'
+    });
+
+    // Version 9 (AI-chatt)
+    this.version(9).stores({
+      chats: 'id, updatedAt',
+      chatMessages: 'id, chatId, timestamp'
     });
   }
 }
@@ -229,4 +237,38 @@ export async function deleteEntry(entryId: string): Promise<void> {
     await db.entryAudio.delete(entryId);
     await db.entries.delete(entryId);
   });
+}
+
+// --- CRUD för AI-chatt ---
+
+export async function createChat(title: string): Promise<string> {
+  const id = crypto.randomUUID();
+  await db.chats.add({ id, title, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  return id;
+}
+
+export async function getChats(): Promise<Chat[]> {
+  return await db.chats.orderBy('updatedAt').reverse().toArray();
+}
+
+export async function deleteChat(id: string): Promise<void> {
+  await db.transaction('rw', db.chats, db.chatMessages, async () => {
+    await db.chatMessages.where('chatId').equals(id).delete();
+    await db.chats.delete(id);
+  });
+}
+
+export async function addChatMessage(chatId: string, role: 'user' | 'assistant', content: string): Promise<void> {
+  await db.chatMessages.add({
+    id: crypto.randomUUID(),
+    chatId,
+    role,
+    content,
+    timestamp: new Date().toISOString()
+  });
+  await db.chats.update(chatId, { updatedAt: new Date().toISOString() });
+}
+
+export async function getChatMessages(chatId: string): Promise<ChatMessage[]> {
+  return await db.chatMessages.where('chatId').equals(chatId).sortBy('timestamp');
 }
