@@ -155,3 +155,21 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
 }
+
+// --- NYA TYPER FÖR NANO AGENT ---
+export type AgentStatus = 'idle' | 'working' | 'paused' | 'terminated' | 'awaiting_approval';
+
+export interface AgentLog {
+  id: string;
+  timestamp: number;
+  message: string;
+  type: 'info' | 'action' | 'error' | 'success' | 'warning';
+  tool?: 'browser' | 'terminal' | 'file' | 'calendar';
+}
+
+export interface AgentMessage {
+  id: string;
+  role: 'user' | 'agent';
+  content: string;
+  timestamp: number;
+}

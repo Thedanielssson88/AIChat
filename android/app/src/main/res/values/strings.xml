@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Dagbok</string>
-    <string name="title_activity_main">Dagbok</string>
-    <string name="package_name">com.dagbok.app</string>
-    <string name="custom_url_scheme">com.dagbok.app</string>
+    <string name="app_name">AIChat</string>
+    <string name="title_activity_main">AIChat</string>
+    <string name="package_name">com.aichatdev.app</string>
+    <string name="custom_url_scheme">com.aichatdev.app</string>
 </resources>

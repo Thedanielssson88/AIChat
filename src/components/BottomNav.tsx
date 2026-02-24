@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Folder, Users, CheckSquare, MessageCircle, Settings, List } from 'lucide-react';
+import { Folder, Users, CheckSquare, MessageCircle, Settings, List, Bot } from 'lucide-react';
 import { clsx } from 'clsx';
 
 export const BottomNav = () => {
@@ -7,6 +7,7 @@ export const BottomNav = () => {
 
   const navItems = [
     { icon: MessageCircle, label: 'Chatt', path: '/' },
+    { icon: Bot, label: 'Nano', path: '/nano' },
     { icon: Folder, label: 'Projekt', path: '/projects' },
     { icon: Users, label: 'Personer', path: '/people' },
     { icon: CheckSquare, label: 'Uppgifter', path: '/tasks' },
@@ -27,7 +28,7 @@ export const BottomNav = () => {
               className={clsx("transition-colors", isActive ? "text-blue-600 fill-blue-100" : "text-gray-400")}
               strokeWidth={isActive ? 2.5 : 2}
             />
-            <span className={clsx("text-[10px] mt-1 font-medium", isActive ? "text-blue-600" : "text-gray-400")}>
+            <span className={clsx("text-[10px] mt-1 font-medium whitespace-nowrap", isActive ? "text-blue-600" : "text-gray-400")}>
               {item.label}
             </span>
           </Link>

@@ -16,6 +16,7 @@ import { MeetingDetail } from './views/MeetingDetail';
 import { MeetingDetailsView } from './views/MeetingDetailsView';
 import { QueueView } from './views/QueueView';
 import { BottomNav } from './components/BottomNav';
+import { NanoView } from './views/NanoView'; // <-- LÄGG TILL DENNA IMPORT
 
 const HardwareBackButtonHandler = () => {
   const navigate = useNavigate();
@@ -69,6 +70,7 @@ function App() {
         <div className="flex-1 overflow-y-auto no-scrollbar">
           <Routes>
             <Route path="/" element={<ChatView />} />
+            <Route path="/nano" element={<NanoView />} /> {/* <-- LÄGG TILL DENNA ROUTE */}
             <Route path="/projects" element={<ProjectsView />} />
             <Route path="/project/:projectId" element={<ProjectDetailView />} />
             <Route path="/meeting/:id" element={<MeetingDetail />} />

@@ -339,34 +339,67 @@ export const transcribeBlobAI = async (blob: Blob, onProgress?: (p: number, msg:
 };
 
 export const sendChatMessageAI = async (messages: { role: 'user' | 'assistant', content: string }[], onProgress?: any) => {
-  const mode = localStorage.getItem('SUMMARY_MODE') || 'api';
+  const mode = localStorage.getItem('SUMMARY_MODE') || 'api'; 
   const temp = Number(localStorage.getItem('CHAT_TEMP') || 0.7);
   const maxTokens = Number(localStorage.getItem('CHAT_MAX_TOKENS') || 1500);
-  const systemInstruction = localStorage.getItem('CHAT_SYSTEM_PROMPT') || "Du är en hjälpsam, vänlig och intelligent AI-assistent. Svara naturligt och kortfattat på användarens frågor.";
+  const systemInstruction = localStorage.getItem('CHAT_SYSTEM_PROMPT') || "Du är en hjälpsam AI-assistent.";
+
+  const timeoutSeconds = Number(localStorage.getItem('AI_TIMEOUT_SECONDS') || 60);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
 
   if (mode === 'lmstudio') {
     const baseUrl = localStorage.getItem('LLM_SERVER_URL') || 'http://100.64.204.100:1234/v1';
     const formattedMessages = [{ role: 'system', content: systemInstruction }, ...messages];
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: formattedMessages, temperature: temp, max_tokens: maxTokens })
-    });
-    if (!response.ok) throw new Error(`Server svarade med status: ${response.status}`);
-    const data = await response.json();
-    return data.choices[0].message.content || "";
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({ messages: formattedMessages, temperature: temp, max_tokens: maxTokens })
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Serverfel (${response.status}): ${errText}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.error) throw new Error(`LM Studio vägrade: ${data.error.message || JSON.stringify(data.error)}`);
+      if (!data.choices || data.choices.length === 0) throw new Error("Ogiltigt svar från LM Studio: " + JSON.stringify(data));
+      
+      // Returnera råtexten (behåll <think> taggar)
+      return data.choices[0].message.content || "";
+    } catch (err: any) {
+      if (err.name === 'AbortError') throw new Error(`Timeout (${timeoutSeconds}s)`);
+      throw err;
+    }
   } else {
+    // API-LÄGE (Gemini)
     const ai = getAIClient();
-    if (!ai) throw new Error("API-nyckel saknas. Gå till Inställningar och lägg in en.");
+    if (!ai) throw new Error("API-nyckel saknas.");
     const chatPrompt = messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n') + '\n\nAssistant:';
-    const result = await ai.models.generateContent({
-      model: getModelName(),
-      config: {
-        temperature: temp,
-        maxOutputTokens: maxTokens
-      },
-      contents: [{ parts: [{ text: `${systemInstruction}\n\n${chatPrompt}` }] }]
-    });
-    return result.text || "";
+    try {
+      const result = await ai.models.generateContent({
+        model: getModelName(),
+        config: { temperature: temp, maxOutputTokens: maxTokens },
+        contents: [{ parts: [{ text: `${systemInstruction}\n\n${chatPrompt}` }] }]
+      });
+      clearTimeout(timeoutId);
+
+      // --- HÄR ÄR FIXEN FÖR GEMINI API ---
+      // Fångar upp om svaret är blockerat eller tomt
+      if (!result || !result.candidates || result.candidates.length === 0) {
+        throw new Error("Inget svar från AI. Det kan ha blivit blockerat av säkerhetsfiltret.");
+      }
+
+      return result.text || "";
+    } catch (err: any) {
+      if (err.name === 'AbortError') throw new Error(`Timeout (${timeoutSeconds}s)`);
+      throw new Error(`Gemini fel: ${err.message}`);
+    }
   }
 };
