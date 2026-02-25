@@ -37,19 +37,24 @@ export const NanoView = () => {
   const handleSend = async () => {
     if (!inputText.trim() || status === 'working') return;
 
-    const newMsg: AgentMessage = { id: Date.now().toString(), role: 'user', content: inputText, timestamp: Date.now() };
+    const newMsg: AgentMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: inputText,
+      timestamp: Date.now()
+    };
+
     setMessages(prev => [...prev, newMsg]);
     setInputText('');
     setStatus('working');
 
-    const serverUrl = localStorage.getItem('NANO_SERVER_URL') || 'http://127.0.0.1:8000';
+    const serverUrl = localStorage.getItem('NANO_SERVER_URL') || 'http://192.168.50.185:8000';
     const apiKey = localStorage.getItem('NANO_API_KEY');
 
-    addLog(`Pratar med Nano...`, 'info');
+    addLog(`Skickar till Nano på ${serverUrl}...`, 'info');
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-
       if (apiKey) {
         headers['Authorization'] = `Bearer ${apiKey}`;
       }
@@ -61,25 +66,43 @@ export const NanoView = () => {
       });
 
       if (!response.ok) {
-        if (response.status === 401) throw new Error("Fel API-nyckel (Unauthorized)");
         throw new Error(`Serverfel: ${response.status}`);
       }
 
-      const data = await response.json();
+      // 1. LÄS SOM TEXT FÖRST (Viktigt för att kunna rensa bort logg-taggarna)
+      const rawText = await response.text();
+      addLog("Rensar och tolkar svar...", "info");
+
+      let finalContent = "";
+
+      try {
+        // 2. KLIPP UT JSON (Letar efter det som finns mellan taggarna i din logg)
+        const jsonMatch = rawText.match(/---NANOCLAW_OUTPUT_START---\s*([\s\S]*?)\s*---NANOCLAW_OUTPUT_END---/);
+        const cleanJson = jsonMatch ? jsonMatch[1] : rawText;
+
+        const data = JSON.parse(cleanJson);
+
+        // 3. ANVÄND 'result' (eftersom det är vad din logg visar att Nano skickar)
+        finalContent = data.reply || data.result || data.response || "Inget text-svar hittades.";
+      } catch (e) {
+        // Om det inte går att tolka som JSON, visa råtexten
+        finalContent = rawText;
+      }
 
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'agent',
-        content: data.reply || data.response || 'Klart.',
+        content: finalContent,
         timestamp: Date.now()
       }]);
+
       setStatus('idle');
     } catch (error: any) {
       addLog(`Anslutningsfel: ${error.message}`, 'error');
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'agent',
-        content: `❌ Nätverksfel. Jag kunde inte nå servern. (${error.message})`,
+        content: `❌ Fel: ${error.message}`,
         timestamp: Date.now()
       }]);
       setStatus('idle');
