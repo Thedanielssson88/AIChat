@@ -3,7 +3,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { Person, MemberGroup } from '../types';
-import { Plus, Users, Briefcase, Trash2, ChevronRight, UserPlus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Users, Briefcase, Trash2, ChevronRight, UserPlus, ArrowLeft } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const AVATAR_COLORS = [
@@ -17,6 +18,7 @@ const AVATAR_COLORS = [
 ];
 
 export const PeopleView: React.FC = () => {
+  const navigate = useNavigate();
   const [newPersonName, setNewPersonName] = useState('');
   const [newPersonTitle, setNewPersonTitle] = useState('');
   
@@ -109,10 +111,18 @@ export const PeopleView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-24">
-      <div className="bg-white p-6 pb-4 shadow-sm sticky top-0 z-10">
-        <h1 className="text-2xl font-bold text-gray-900 leading-tight">Kontakter & CRM</h1>
-        <p className="text-sm text-gray-500 mt-1">Hantera alla personer och deras roller</p>
-      </div>
+      <header className="flex items-center gap-3 mb-6 pt-4 px-6 bg-white shadow-sm sticky top-0 z-10 pb-4">
+        <button 
+          onClick={() => navigate(-1)} 
+          className="p-2 -ml-2 bg-white rounded-full shadow-sm hover:bg-gray-50 border border-gray-100 transition-colors"
+        >
+          <ArrowLeft size={20} className="text-gray-600" />
+        </button>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Personer</h1>
+          <p className="text-gray-500 text-sm">Här är dina kontakter</p>
+        </div>
+      </header>
 
       <div className="p-6 space-y-8">
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">

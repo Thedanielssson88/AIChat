@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Terminal, Settings, Send, Trash2, ChevronDown, ChevronUp, Download, X, Paperclip, FolderOpen, Plus, Check, MessageSquare, Mic, Square, Loader2, Edit2 } from 'lucide-react';
+import { Terminal, Settings, Send, Trash2, ChevronDown, ChevronUp, Download, X, Paperclip, FolderOpen, Plus, Check, MessageSquare, Mic, Square, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { AgentStatus, AgentMessage } from '../types';
@@ -9,7 +9,6 @@ import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { startRecording, stopRecording } from '../services/audioRecorder';
 import { transcribeBlobAI } from '../services/geminiService';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { App } from '@capacitor/app';
 
 type LocalAgentMessage = AgentMessage & {
   sessionId?: string;
@@ -87,12 +86,14 @@ async function dbPut(store: string, value: object): Promise<void> {
 
 // ── Text-To-Speech Helper ──
 const speakText = async (text: string, onEnded?: () => void) => {
+  // 🔥 FIX: Ta bort filsökvägar helt från texten innan den skickas till TTS
   const cleanText = text
   .replace(/(?:\/workspace\/|\/home\/deck\/)[^\s`'"<>\n]+/gi, '')
   .replace(/[\*\#_`]/g, '')
   .replace(/[\u{1F600}-\u{1F64F}]/gu, '')
   .trim();
 
+  // Om meddelandet bara var en sökväg och nu blev tomt, stäng inte av loopen
   if (!cleanText) {
     if (onEnded) onEnded();
     return;
@@ -101,6 +102,7 @@ const speakText = async (text: string, onEnded?: () => void) => {
   const ttsMode = localStorage.getItem('TTS_MODE') || 'local';
   const openAiKey = localStorage.getItem('OPENAI_API_KEY');
 
+  // --- API LÄGE (OPENAI) ---
   if (ttsMode === 'api' && openAiKey && openAiKey.trim().length > 0) {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     try {
@@ -133,6 +135,7 @@ const speakText = async (text: string, onEnded?: () => void) => {
     }
   }
 
+  // --- LOKAL LÄGE (Native Capacitor TTS) ---
   try {
     await TextToSpeech.stop().catch(() => {});
 
@@ -149,6 +152,7 @@ const speakText = async (text: string, onEnded?: () => void) => {
     if (onEnded) onEnded();
 
   } catch (nativeErr) {
+    // Web Fallback (för dator)
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(cleanText);
@@ -162,6 +166,7 @@ const speakText = async (text: string, onEnded?: () => void) => {
   }
 };
 
+const IMAGE_PATH_REGEX = /(?:```[a-z]*\n)?(\/workspace\/[\w./\-\s]+\.(?:jpg|jpeg|png|gif|webp|svg))(?:\n```)?|`(\/workspace\/[\w./\-\s]+\.(?:jpg|jpeg|png|gif|webp|svg))`/gi;
 const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
 const INLINE_IMAGE_URL_REGEX = /(?<!\()(https?:\/\/\S+\.(jpg|jpeg|png|gif|webp|svg)(\?\S*)?)/gi;
 
@@ -185,14 +190,8 @@ function extractFilePaths(text: string): string[] {
   let match;
   FILE_PATH_REGEX.lastIndex = 0;
   while ((match = FILE_PATH_REGEX.exec(text)) !== null) {
-    let p = match[2] || match[3];
-    if (p) {
-      if (!p.startsWith('/')) {
-        if (!p.includes(' ')) p = '/workspace/group/' + p;
-        else continue;
-      }
-      paths.push(p);
-    }
+    const p = match[2] || match[3];
+    if (p) paths.push(p);
   }
   return [...new Set(paths)];
 }
@@ -203,33 +202,23 @@ function toHostPath(p: string): string {
   .replace('/workspace/extra/', '/home/deck/NanoClaw/groups/main/uploads/');
 }
 
-function getMediaType(p: string): 'image' | 'video' | 'audio' | 'html' | 'file' {
+function getMediaType(p: string): 'image' | 'video' | 'audio' | 'file' {
   const ext = p.split('.').pop()?.toLowerCase() || '';
   if (['jpg','jpeg','png','gif','webp','svg'].includes(ext)) return 'image';
   if (['mp4','webm','mov','avi','mkv'].includes(ext)) return 'video';
   if (['mp3','ogg','wav','m4a','flac','aac'].includes(ext)) return 'audio';
-  if (['html','htm'].includes(ext)) return 'html';
   return 'file';
 }
 
-const ALL_PATH_REGEX = /`([^`]+\.[a-zA-Z0-9]+)`|((?:\/workspace\/|\/home\/deck\/)[^\s`'"<>\n]+\.[a-zA-Z0-9]+)/gi;
+const ALL_PATH_REGEX = /(?:```[a-z]*\n)?((?:\/workspace\/|\/home\/deck\/)[^\s`'"<>\n]+\.(?:jpg|jpeg|png|gif|webp|svg|mp4|webm|mov|mp3|wav|m4a|pdf|txt|md|docx|xlsx|zip|json))(?:\n```)?|`((?:\/workspace\/|\/home\/deck\/)[^\s`'"<>\n]+\.(?:jpg|jpeg|png|gif|webp|svg|mp4|webm|mov|mp3|wav|m4a|pdf|txt|md|docx|xlsx|zip|json))`/gi;
 
 function extractAllFilePaths(text: string): string[] {
   const paths: string[] = [];
   let match;
   ALL_PATH_REGEX.lastIndex = 0;
   while ((match = ALL_PATH_REGEX.exec(text)) !== null) {
-    let p = (match[1] || match[2] || '').trim();
-    if (p) {
-      if (!p.startsWith('/')) {
-        if (!p.includes(' ')) {
-          p = '/workspace/group/' + p;
-          paths.push(p);
-        }
-      } else {
-        paths.push(p);
-      }
-    }
+    const p = (match[1] || match[2] || '').trim();
+    if (p) paths.push(p);
   }
   return [...new Set(paths)];
 }
@@ -316,24 +305,17 @@ export const NanoView = () => {
   const liveStreamEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const shouldContinueListeningRef = useRef(false);
+
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
   const [showSessionsMenu, setShowSessionsMenu] = useState(false);
-
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState('');
-
   const hasSentInThisSessionRef = useRef(false);
 
   const [status, setStatus] = useState<AgentStatus>('idle');
   const [nanoMode, setNanoMode] = useState<'lite' | 'med' | 'full'>(() => (localStorage.getItem('NANO_MODE') as 'lite' | 'med' | 'full') || 'full');
 
-  // 🔥 NYA TILLSTÅND FÖR LÄGEN 🔥
-  const [inputMode, setInputMode] = useState<'chat' | 'voice'>('chat');
-  const inputModeRef = useRef(inputMode);
-  useEffect(() => { inputModeRef.current = inputMode; }, [inputMode]);
-
-  const [speakerMode, setSpeakerMode] = useState(() => localStorage.getItem('NANO_SPEAKER_MODE') !== 'false');
+  const [voiceMode, setVoiceMode] = useState(() => localStorage.getItem('NANO_VOICE_MODE') === 'true');
 
   const [inputText, setInputText] = useState('');
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
@@ -347,8 +329,6 @@ export const NanoView = () => {
   const mediaCache = useRef<Record<string, string>>({});
   const [mediaCacheState, setMediaCacheState] = useState<Record<string, string>>({});
 
-  const isInBackgroundRef = useRef(false);
-
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const isLocalMode = localStorage.getItem('TRANSCRIPTION_MODE') === 'local';
@@ -356,13 +336,9 @@ export const NanoView = () => {
   const inputTextRef = useRef(inputText);
   useEffect(() => { inputTextRef.current = inputText; }, [inputText]);
   const originalInputTextRef = useRef('');
-
-  // Buffert för att säkra att sista ordet alltid kommer med
-  const lastHeardMicTextRef = useRef('');
-
+  const silenceTimerRef = useRef<any>(null);
   const isRecordingRef = useRef(false);
   const speechListenerRef = useRef<any>(null);
-  const speechStateListenerRef = useRef<any>(null);
 
   type Permission = { label: string; description: string; key: string; enabled: boolean; builtIn: boolean };
   const [permissions, setPermissions] = useState<Permission[]>([]);
@@ -370,18 +346,7 @@ export const NanoView = () => {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const [attachedFiles, setAttachedFiles] = useState<{
-    name: string;
-    path: string;
-    mimetype: string;
-    localUrl?: string;
-    isVirtual?: boolean;
-    textContent?: string;
-  }[]>([]);
-
-  const [htmlReportUrl, setHtmlReportUrl] = useState<string | null>(null);
-
+  const [attachedFiles, setAttachedFiles] = useState<{ name: string; path: string; mimetype: string; localUrl?: string }[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -396,31 +361,8 @@ export const NanoView = () => {
   };
 
   useEffect(() => {
-    localStorage.setItem('NANO_SPEAKER_MODE', String(speakerMode));
-  }, [speakerMode]);
-
-  useEffect(() => {
-    const handleMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'NANO_DEEP_DIVE') {
-        const { title, content } = e.data.payload;
-
-        // Stäng HTML-vyn
-        setHtmlReportUrl(null);
-
-        // Lägg till som en virtuell bilaga
-        setAttachedFiles(prev => [...prev, {
-          name: `Utdrag: ${title}`,
-          path: `virtual://${title.replace(/\s+/g, '_')}.txt`,
-                         mimetype: 'text/plain',
-                         isVirtual: true,
-                         textContent: content
-        }]);
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
+    localStorage.setItem('NANO_VOICE_MODE', String(voiceMode));
+  }, [voiceMode]);
 
   useEffect(() => {
     async function loadData() {
@@ -449,13 +391,6 @@ export const NanoView = () => {
 
     if (isLocalMode) SpeechRecognition.requestPermissions().catch(err => console.error("Kunde inte få mikrofonbehörighet:", err));
 
-    const appStateListener = App.addListener('appStateChange', ({ isActive }) => {
-      isInBackgroundRef.current = !isActive;
-      if (isActive && status === 'working') {
-        connectSSE(); // Återanslut strömmen om vi var i bakgrunden
-      }
-    });
-
     const savedMounts = localStorage.getItem('NANO_MOUNTS');
     if (savedMounts) {
       try {
@@ -465,10 +400,6 @@ export const NanoView = () => {
         fetch(`${getServerUrl()}/api/config`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extraMounts: enabledPaths }) }).catch(() => {});
       } catch {}
     }
-
-    return () => {
-      appStateListener.then(l => l.remove());
-    };
   }, []);
 
   const loadSession = async (sid: string, preloadedMsgs?: LocalAgentMessage[]) => {
@@ -512,30 +443,6 @@ export const NanoView = () => {
       if (newSessions.length > 0) loadSession(newSessions[0].id);
       else startNewSession();
     }
-  };
-
-  const updateSessionTitle = async (sid: string, newTitle: string) => {
-    if (!newTitle.trim()) {
-      setEditingSessionId(null);
-      return;
-    }
-    const db = await openDB();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE_SESSIONS, 'readwrite');
-      const store = tx.objectStore(STORE_SESSIONS);
-      const req = store.get(sid);
-      req.onsuccess = () => {
-        const session = req.result;
-        if (session) {
-          session.title = newTitle.trim();
-          store.put(session);
-        }
-      };
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    setSessions(prev => prev.map(s => s.id === sid ? { ...s, title: newTitle.trim() } : s));
-    setEditingSessionId(null);
   };
 
   const openAccessSettings = async () => {
@@ -594,8 +501,6 @@ export const NanoView = () => {
       const geminiKey = localStorage.getItem('GEMINI_API_KEY') || '';
       const geminiModelId = localStorage.getItem('NANO_GEMINI_MODEL_ID') || 'gemini-2.0-flash';
       const nanoModeVal = (localStorage.getItem('NANO_MODE') as 'lite' | 'med' | 'full') || 'full';
-      const lmStudioUrl = localStorage.getItem('LM_STUDIO_URL') || 'http://localhost:1234';
-      const lmStudioModel = localStorage.getItem('LM_STUDIO_MODEL') || '';
 
       const payload: any = {
         message: content,
@@ -603,8 +508,7 @@ export const NanoView = () => {
         geminiApiKey: geminiKey,
         geminiModelId: geminiModelId,
         mode: nanoModeVal,
-        sessionId: currentSessionId,
-        ...(selectedModel === 'lmstudio' ? { lmStudioUrl, lmStudioModel } : {})
+        sessionId: currentSessionId
       };
 
       const response = await fetch(`${getServerUrl()}/api/chat`, {
@@ -706,20 +610,6 @@ export const NanoView = () => {
     }
   };
 
-  const fetchHtmlFile = async (containerPath: string) => {
-    const hostPath = toHostPath(containerPath);
-    const url = `${getServerUrl()}/api/files?path=${encodeURIComponent(hostPath)}`;
-    try {
-      const res = await fetch(url, { headers: getHeaders() });
-      if (!res.ok) throw new Error('Kunde inte hämta rapporten');
-      const htmlContent = await res.text();
-      setHtmlReportUrl(htmlContent);
-    } catch (err) {
-      console.error(err);
-      alert('Kunde inte ladda HTML-rapporten.');
-    }
-  };
-
   const downloadFile = (containerPath: string) => {
     const hostPath = toHostPath(containerPath);
     const url = `${getServerUrl()}/api/files?path=${encodeURIComponent(hostPath)}`;
@@ -729,34 +619,23 @@ export const NanoView = () => {
     a.click();
   };
 
-  const connectSSE = (containerId?: string) => {
+  const connectSSE = (containerId: string) => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
-
-    const url = containerId
-    ? `${getServerUrl()}/api/docker-logs?containerId=${containerId}`
-    : `${getServerUrl()}/api/docker-logs`;
+    const url = `${getServerUrl()}/api/logs/${containerId}`;
 
     fetchEventSource(url, {
       method: 'GET',
-      headers: { 'Accept': 'text-event-stream', ...getHeaders() },
-                     signal: abortControllerRef.current.signal,
-                     openWhenHidden: true,
-                     fetch: (...args) => window.fetch(...args),
-                     onmessage(ev) {
-                       try {
-                         if (!ev.data) return;
-                         try {
-                           const data = JSON.parse(ev.data);
-                           if (data.status === 'working' && data.result) {
-                             addLogLine('⏳ ' + data.result);
-                             return;
-                           }
-                         } catch { /* if not json */ }
-                         addLogLine(ev.data);
-                       } catch { /* ignore */ }
-                     },
-                     onerror(err) { console.error("SSE Fel:", err); }
+      headers: { 'Accept': 'text/event-stream' },
+      signal: abortControllerRef.current.signal,
+      onmessage(ev) {
+        try {
+          if(!ev.data) return;
+          const data = JSON.parse(ev.data);
+          if (data.status === 'working') addLogLine('⏳ ' + data.result);
+        } catch (err) {}
+      },
+      onerror(err) { throw err; }
     });
   };
 
@@ -782,169 +661,127 @@ export const NanoView = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-    // 🔥 STABIL OCH FOKUSERAD INSPELNING 🔥
-    const startListening = async () => {
-      if (isRecordingRef.current) return;
-      setIsRecording(true);
-      isRecordingRef.current = true;
-      originalInputTextRef.current = inputTextRef.current;
-      lastHeardMicTextRef.current = '';
-
-      if (isLocalMode) {
-        if (speechListenerRef.current) speechListenerRef.current.remove();
-        if (speechStateListenerRef.current) speechStateListenerRef.current.remove();
-
-        speechListenerRef.current = await SpeechRecognition.addListener('partialResults', (data: any) => {
-          if (!isRecordingRef.current) return;
-          if (data.matches && data.matches.length > 0) {
-            const currentTranscript = data.matches[0];
-
-            if (currentTranscript.trim().length > 0) {
-              window.speechSynthesis?.cancel();
-              TextToSpeech.stop().catch(()=>{});
-            }
-
-            // UPPDATERAR INPUT-TEXTEN DIREKT (Löser problemet med att den bara visar "Lyssnar...")
-            const updatedFullText = originalInputTextRef.current + (originalInputTextRef.current ? " " : "") + currentTranscript;
-            lastHeardMicTextRef.current = updatedFullText;
-            setInputText(updatedFullText);
-          }
-        });
-
-        speechStateListenerRef.current = await SpeechRecognition.addListener('listeningState', (data: any) => {
-          if (data.status === 'stopped' && isRecordingRef.current) {
-            setTimeout(() => {
-              if (!isRecordingRef.current) return;
-
-              const finalText = lastHeardMicTextRef.current.trim();
-              // Bara auto-skicka om vi faktiskt är på Tala-fliken
-              const autoSend = localStorage.getItem('AUTO_SEND_AUDIO') === 'true' || inputModeRef.current === 'voice';
-
-            if (autoSend && finalText.length > 0) {
-              handleSend(finalText);
-            } else if (isRecordingRef.current) {
-              originalInputTextRef.current = finalText;
-              SpeechRecognition.start({ language: 'sv-SE', partialResults: true, popup: false }).catch(() => {});
-            }
-            }, 600);
-          }
-        });
-
-        await SpeechRecognition.start({ language: 'sv-SE', partialResults: true, popup: false }).catch((e) => {
-          console.error("Mic start failed", e);
-          setIsRecording(false);
-          isRecordingRef.current = false;
-        });
-
-      } else {
-        await startRecording();
-      }
-    };
-
-    const stopListening = async () => {
-      if (!isRecordingRef.current) return null;
-      isRecordingRef.current = false;
-      setIsRecording(false);
-
-      if (speechListenerRef.current) {
-        speechListenerRef.current.remove();
-        speechListenerRef.current = null;
-      }
-      if (speechStateListenerRef.current) {
-        speechStateListenerRef.current.remove();
-        speechStateListenerRef.current = null;
-      }
-
-      if (isLocalMode) {
-        await SpeechRecognition.stop().catch(()=>{});
-        return null;
-      } else {
-        const audioBlob = await stopRecording();
-        return audioBlob;
-      }
-    };
-
     const toggleRecording = async () => {
       window.speechSynthesis?.cancel();
-      TextToSpeech.stop().catch(()=>{});
 
       if (isRecordingRef.current) {
-        const audioBlob = await stopListening();
-        const autoSend = localStorage.getItem('AUTO_SEND_AUDIO') === 'true' || inputModeRef.current === 'voice';
+        isRecordingRef.current = false;
+        setIsRecording(false);
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
         if (isLocalMode) {
-          const textToSubmit = lastHeardMicTextRef.current || inputTextRef.current;
-          if (autoSend && textToSubmit.trim().length > 0) {
-            handleSend(textToSubmit.trim());
-          }
-        } else if (audioBlob) {
+          await SpeechRecognition.stop().catch(() => {});
+        } else {
+          const audioBlob = await stopRecording();
           setIsTranscribing(true);
           try {
             const text = await transcribeBlobAI(audioBlob);
-            const newText = (inputTextRef.current + (inputTextRef.current ? " " : "") + text).trim();
-            setInputText(newText);
-
-            if (autoSend && newText.length > 0) {
-              handleSend(newText);
-            }
+            setInputText(prev => (prev + (prev ? " " : "") + text).trim());
           } catch(e) {
             alert("Kunde inte transkribera ljudet.");
           }
           setIsTranscribing(false);
         }
       } else {
-        await startListening();
+        setIsRecording(true);
+        isRecordingRef.current = true;
+        originalInputTextRef.current = inputText;
+        const autoSend = localStorage.getItem('AUTO_SEND_AUDIO') === 'true';
+
+        if (isLocalMode) {
+          const langCode = localStorage.getItem('TRANSCRIPTION_LANG') || 'sv';
+          const recLang = langCode === 'en' ? 'en-US' : 'sv-SE';
+
+          if (speechListenerRef.current) speechListenerRef.current.remove();
+
+          try {
+            speechListenerRef.current = await SpeechRecognition.addListener('partialResults', (data: any) => {
+              if (!isRecordingRef.current) return;
+              if (data.matches && data.matches.length > 0) {
+                const currentTranscript = data.matches[0];
+                setInputText(originalInputTextRef.current + (originalInputTextRef.current ? " " : "") + currentTranscript);
+
+                if (autoSend) {
+                  if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+                  silenceTimerRef.current = setTimeout(() => {
+                    if (!isRecordingRef.current) return;
+                    shouldContinueListeningRef.current = true;
+                    isRecordingRef.current = false;
+                    setIsRecording(false);
+                    SpeechRecognition.stop();
+                    handleSend(inputTextRef.current);
+                  }, 1500);
+                }
+              }
+            });
+            await SpeechRecognition.start({ language: recLang, partialResults: true, popup: false });
+          } catch (err) {
+            console.error("Kunde inte starta mikrofonen:", err);
+            isRecordingRef.current = false;
+            setIsRecording(false);
+          }
+        } else {
+          await startRecording();
+        }
       }
     };
 
-    const handleSend = async (textOverride?: string) => {
+    const handleSend = async (eOrText?: React.MouseEvent | React.KeyboardEvent | string) => {
       window.speechSynthesis?.cancel();
-      TextToSpeech.stop().catch(()=>{});
 
-      let finalInput = typeof textOverride === 'string' ? textOverride : inputText;
+      let finalInput = inputText;
+      if (typeof eOrText === 'string') finalInput = eOrText;
       finalInput = finalInput.trim();
 
+      if (!finalInput && attachedFiles.length === 0) return;
+      if (status === 'working') return;
+
       if (isRecordingRef.current) {
-        await stopListening();
-        originalInputTextRef.current = "";
+        isRecordingRef.current = false;
+        setIsRecording(false);
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        if (isLocalMode) await SpeechRecognition.stop().catch(() => {});
+        else await stopRecording();
       }
 
-      if (!finalInput && attachedFiles.length === 0) {
-        return;
-      }
-
+      const previousMessages = messages.filter(m => m.id !== '1' && m.role !== 'system');
       let activeSessionId = currentSessionId;
+
       if (!activeSessionId) {
         activeSessionId = Date.now().toString();
         setCurrentSessionId(activeSessionId);
-        const newS = { id: activeSessionId, title: finalInput.substring(0, 20), timestamp: Date.now() };
-        dbPut(STORE_SESSIONS, newS);
-        setSessions(prev => [newS, ...prev]);
+        const title = finalInput.length > 25 ? finalInput.substring(0, 25) + '...' : (finalInput || 'Ny konversation');
+        const newSession: ChatSession = { id: activeSessionId, title, timestamp: Date.now() };
+        dbPut(STORE_SESSIONS, newSession);
+        setSessions(prev => [newSession, ...prev]);
       }
 
       let messageText = finalInput;
       if (attachedFiles.length > 0) {
         const filePart = attachedFiles.map(f => {
-          if (f.isVirtual && f.textContent) {
-            return `[Bifogat underlag - ${f.name}]:\n"""\n${f.textContent}\n"""`;
-          }
-          return `[Bifogad fil: ${f.name} → ${f.path.replace('/home/deck/NanoClaw/groups/main/', '/workspace/group/')}]`;
-        }).join('\n\n');
+          const containerPath = f.path.replace('/home/deck/NanoClaw/groups/main/', '/workspace/group/');
+          return `[Bifogad fil: ${f.name} → ${containerPath}]`;
+        }).join('\n');
         messageText = finalInput ? `${finalInput}\n\n${filePart}` : filePart;
       }
 
       let apiPayloadText = messageText;
 
-      if (inputModeRef.current === 'voice') {
-        apiPayloadText = `[System: Användaren pratar med dig i 'Voice Mode'. Du MÅSTE svara kortfattat. Inga snedstreck (/), ingen markdown.]\n\n${apiPayloadText}`;
+      // 🔥 FIX: Röst-prompten med absolut förbud mot "slash" och krav på riktiga snedstreck
+      if (voiceMode) {
+        const langCode = localStorage.getItem('TRANSCRIPTION_LANG') || 'sv';
+        let aiLanguage = 'SVENSKA';
+        // ... din befintliga Voice-prompt
+        apiPayloadText = `[System: Användaren pratar med dig i 'Voice Mode'. Du MÅSTE svara kortfattat... osv]\n\n${apiPayloadText}`;
       } else {
+        // 🔥 NYHET: Säg åt den att Röstläget är avstängt!
         apiPayloadText = `[System: 'Voice Mode' är nu AVSTÄNGT. Återgå till normal text-chatt. Du FÅR använda långa svar, punktlistor, kod och markdown. Du MÅSTE använda riktiga snedstreck (/) i filsökvägar och får inte längre skriva ordet 'slash'.]\n\n${apiPayloadText}`;
       }
 
       const selectedModel = localStorage.getItem('NANO_MODEL') || 'claude';
 
-      if (activeSessionId && !hasSentInThisSessionRef.current && messages.length > 0 && nanoMode !== 'lite') {
-        const recentMessages = messages.slice(-4);
+      if (activeSessionId && !hasSentInThisSessionRef.current && previousMessages.length > 0 && nanoMode !== 'lite') {
+        const recentMessages = previousMessages.slice(-4);
         const contextString = recentMessages.map(m => {
           let content = m.content;
           if (m.role === 'agent' && content.length > 400) {
@@ -963,31 +800,13 @@ export const NanoView = () => {
       });
 
       setInputText('');
-      lastHeardMicTextRef.current = '';
       setAttachedFiles([]);
       setStatus('working');
-
-      // Inväntar loggar osynligt i bakgrunden om inte användaren öppnat rullgardinen
-      addLogLine(`> Uppdrag startat. Inväntar docker logs...`);
-
-      let bgTaskId: string | undefined;
-      try {
-        const bg = await App.requestBackgroundTask({
-          reason: 'Inväntar svar från agent',
-          description: 'Håller nätverkskopplingen vid liv när appen är i bakgrunden'
-        });
-        bgTaskId = bg.taskId;
-      } catch (e) {}
-
-      setTimeout(() => {
-        connectSSE();
-      }, 1500);
+      addLogLine(`> ${finalInput || 'Skickade filer'}`);
 
       try {
         const geminiKey = localStorage.getItem('GEMINI_API_KEY') || '';
         const geminiModelId = localStorage.getItem('NANO_GEMINI_MODEL_ID') || 'gemini-2.0-flash';
-        const lmStudioUrl = localStorage.getItem('LM_STUDIO_URL') || 'http://localhost:1234';
-        const lmStudioModel = localStorage.getItem('LM_STUDIO_MODEL') || '';
 
         const requestBody: any = {
           message: apiPayloadText,
@@ -995,43 +814,40 @@ export const NanoView = () => {
           geminiApiKey: geminiKey,
           geminiModelId: geminiModelId,
           mode: nanoMode,
-          sessionId: activeSessionId,
-          ...(selectedModel === 'lmstudio' ? { lmStudioUrl, lmStudioModel } : {})
+          sessionId: activeSessionId
         };
 
         const response = await fetch(`${getServerUrl()}/api/chat`, {
           method: 'POST',
           headers: getHeaders(),
-                                     body: JSON.stringify(requestBody),
-                                     keepalive: true,
+                                     body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) throw new Error(`Serverfel: ${response.status}`);
+        const earlyContainerId = response.headers.get('X-Container-Id');
+        if (earlyContainerId) connectSSE(earlyContainerId);
 
         const data = await response.json();
         const finalContent = data.reply || data.result || data.response || 'Inget svar.';
+        if (!earlyContainerId && data.containerId) connectSSE(data.containerId);
 
-        // 🔥 LÖSER RUNDGÅNG-PROBLEMET 🔥
-        // Vi kollar speakerMode. Om ljud är PÅ, prata först, SEN slå på micken!
-        if (speakerMode) {
+        if (voiceMode) {
+          const autoSend = localStorage.getItem('AUTO_SEND_AUDIO') === 'true';
+          const shouldContinue = shouldContinueListeningRef.current;
+          shouldContinueListeningRef.current = false;
+
           speakText(finalContent, () => {
-            // Denna kod körs exakt när AI:n stänger munnen.
-            if (inputModeRef.current === 'voice') {
-              startListening();
+            if (autoSend && shouldContinue) {
+              setTimeout(() => {
+                toggleRecording();
+              }, 500);
             }
           });
         } else {
-          // Om uppläsning är avstängd, slå på micken direkt efter anropet
-          if (inputModeRef.current === 'voice') {
-            setTimeout(() => {
-              startListening();
-            }, 300);
-          }
+          shouldContinueListeningRef.current = false;
         }
 
-        addLogLine(`< Klar. Svar mottaget.`);
-        if (abortControllerRef.current) abortControllerRef.current.abort();
-
+        addLogLine(`< ${finalContent.substring(0, 120)}...`);
         addMessage({
           id: Date.now().toString(),
                    role: 'agent',
@@ -1041,17 +857,12 @@ export const NanoView = () => {
                    inputTokens: data.inputTokens,
                    outputTokens: data.outputTokens,
         });
-
       } catch (error: any) {
         addLogLine(`[FEL] ${error.message}`);
-        if (abortControllerRef.current) abortControllerRef.current.abort();
         addMessage({ id: Date.now().toString(), role: 'agent', content: `❌ Fel: ${error.message}`, timestamp: Date.now(), sessionId: activeSessionId });
-      } finally {
-        if (bgTaskId) {
-          App.finishBackgroundTask({ taskId: bgTaskId }).catch(()=>{});
-        }
-        setStatus('idle');
       }
+
+      setStatus('idle');
     };
 
     const handleLongPressStart = (msgId: string, e: React.TouchEvent | React.MouseEvent) => {
@@ -1069,8 +880,6 @@ export const NanoView = () => {
       const externalImages = msg.role === 'agent' ? extractExternalImageUrls(msg.content) : [];
       const isUser = msg.role === 'user';
       const toMediaUrl = (p: string) => `${getServerUrl()}/api/files?path=${encodeURIComponent(toHostPath(p))}`;
-
-      const htmlFiles = allServerPaths.filter(p => getMediaType(p) === 'html');
 
       return (
         <div key={msg.id} className={clsx("flex flex-col gap-0.5", isUser ? 'items-end' : 'items-start')} onTouchStart={e => handleLongPressStart(msg.id, e)} onTouchEnd={handleLongPressEnd} onTouchMove={handleLongPressEnd} onMouseDown={e => handleLongPressStart(msg.id, e)} onMouseUp={handleLongPressEnd} onMouseLeave={handleLongPressEnd}>
@@ -1092,8 +901,6 @@ export const NanoView = () => {
             const type = getMediaType(p);
             const name = p.split('/').pop() || p;
             const cachedUrl = mediaCacheState[p];
-
-            if (type === 'html') return null;
 
             if (!cachedUrl) fetchMediaAsBlob(serverUrl, p);
 
@@ -1130,49 +937,7 @@ export const NanoView = () => {
           })}
           </div>
         )}
-        {isUser ? (
-          <div className="text-sm whitespace-pre-wrap leading-relaxed break-words">{msg.content}</div>
-        ) : (
-          <div className="break-words overflow-hidden">
-          {msg.content.includes('<!DOCTYPE html>') ? (
-            <div className="flex flex-col gap-3">
-            <p className="text-sm text-gray-300">Jag har genererat en interaktiv rapport baserat på din förfrågan.</p>
-            <button
-            onClick={() => {
-              const htmlMatch = msg.content.match(/```html\n([\s\S]*?)```/) || msg.content.match(/(<!DOCTYPE html>[\s\S]*<\/html>)/i);
-              if (htmlMatch) {
-                setHtmlReportUrl(htmlMatch[1] || htmlMatch[0]);
-              }
-            }}
-            className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
-            >
-            <span>📄</span> Öppna Rapport i Helskärm
-            </button>
-            </div>
-          ) : (
-            renderMarkdown(msg.content)
-          )}
-          </div>
-        )}
-
-        {!isUser && htmlFiles.length > 0 && (
-          <div className="mt-3 flex flex-col gap-2 border-t border-gray-700 pt-3">
-          <p className="text-[11px] text-gray-400 mb-1 uppercase tracking-wide">Tillgängliga Rapporter:</p>
-          {htmlFiles.map((fp, i) => {
-            const fileName = fp.split('/').pop() || 'Rapport';
-          return (
-            <button
-            key={`html-${i}`}
-            onClick={() => fetchHtmlFile(fp)}
-            className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-md transition-all flex items-center gap-2 text-sm"
-            >
-            <span>📄</span> Öppna {fileName} i Helskärm
-            </button>
-          );
-          })}
-          </div>
-        )}
-
+        {isUser ? <div className="text-sm whitespace-pre-wrap leading-relaxed break-words">{msg.content}</div> : <div className="break-words overflow-hidden">{renderMarkdown(msg.content)}</div>}
         {filePaths.filter(fp => !allServerPaths.includes(fp)).length > 0 && (
           <div className="mt-3 flex flex-col gap-2">
           {filePaths.filter(fp => !allServerPaths.includes(fp)).map((fp, i) => (
@@ -1225,10 +990,32 @@ export const NanoView = () => {
       </div>
       </div>
 
-      <div className="flex gap-2 relative items-center">
-      <button onClick={() => { setShowSessionsMenu(true); setShowClearMenu(false); }} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 transition-colors" title="Konversationer">
+      <div className="flex gap-2 relative">
+      <div className="relative">
+      <button onClick={() => { setShowSessionsMenu(v => !v); setShowClearMenu(false); }} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 transition-colors" title="Konversationer">
       <MessageSquare className="w-5 h-5" />
       </button>
+      {showSessionsMenu && (
+        <div className="absolute right-0 top-10 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 w-64 overflow-hidden flex flex-col max-h-[60vh]">
+        <div className="flex justify-between items-center px-4 py-2 border-b border-gray-700">
+        <span className="text-xs font-bold text-gray-400 uppercase">Chattar</span>
+        <button onClick={() => setShowSessionsMenu(false)}><X className="w-4 h-4 text-gray-500" /></button>
+        </div>
+        <button onClick={startNewSession} className="flex items-center gap-2 m-2 p-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors justify-center text-sm font-bold shadow-sm">
+        <Plus className="w-4 h-4" /> Ny konversation
+        </button>
+        <div className="overflow-y-auto flex-1 p-2 space-y-1">
+        {sessions.map(s => (
+          <div key={s.id} onClick={() => loadSession(s.id)} className={clsx("flex items-center justify-between p-2 rounded-lg cursor-pointer group transition-colors", currentSessionId === s.id ? "bg-gray-700 text-white" : "hover:bg-gray-700/50 text-gray-400")}>
+          <div className="truncate text-sm pr-2">{s.title}</div>
+          <button onClick={(e) => deleteSession(s.id, e)} className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"><Trash2 className="w-3.5 h-3.5" /></button>
+          </div>
+        ))}
+        {sessions.length === 0 && <div className="text-center text-xs text-gray-500 py-4">Inga gamla chattar</div>}
+        </div>
+        </div>
+      )}
+      </div>
 
       <div className="relative">
       <button onClick={() => { setShowClearMenu(v => !v); setShowSessionsMenu(false); }} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 transition-colors" title="Rensa">
@@ -1238,7 +1025,7 @@ export const NanoView = () => {
         <div className="absolute right-0 top-10 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 w-52 overflow-hidden">
         <div className="flex justify-between items-center px-4 py-2 border-b border-gray-700">
         <span className="text-xs font-bold text-gray-400 uppercase">Rensa</span>
-        <button onClick={() => setShowClearMenu(false)}><X className="w-4 h-4 text-gray-500 hover:text-white" /></button>
+        <button onClick={() => setShowClearMenu(false)}><X className="w-4 h-4 text-gray-500" /></button>
         </div>
         <button onClick={startNewSession} className="w-full text-left px-4 py-3 text-sm hover:bg-gray-700 text-gray-200 transition-colors">Rensa skärm (Ny chatt)</button>
         <button onClick={clearLogs} className="w-full text-left px-4 py-3 text-sm hover:bg-gray-700 text-gray-200 transition-colors border-t border-gray-700">Rensa Live Action Stream</button>
@@ -1246,11 +1033,31 @@ export const NanoView = () => {
         </div>
       )}
       </div>
-
       <button onClick={openAccessSettings} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 transition-colors" title="Åtkomst"><FolderOpen className="w-5 h-5" /></button>
-      <button onClick={() => navigate('/settings')} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 transition-colors" title="Inställningar">
-      <Settings className="w-5 h-5" />
+
+      {/* RÖST-TOGGLE I HEADER */}
+      <button onClick={() => setVoiceMode(!voiceMode)} className={clsx("px-2 py-1 rounded-lg text-[11px] font-bold transition-colors border",
+        voiceMode ? "bg-green-500/20 border-green-500/40 text-green-400" : "bg-gray-700 border-gray-600 text-gray-400"
+      )} title="Röstläge: AI pratar tillbaka">
+      {voiceMode ? '🔊 Röst På' : '🔈 Röst Av'}
       </button>
+
+      <button onClick={() => {
+        const next = nanoMode === 'lite' ? 'med' : nanoMode === 'med' ? 'full' : 'lite';
+        setNanoMode(next);
+        localStorage.setItem('NANO_MODE', next);
+      }} className={clsx("px-2 py-1 rounded-lg text-[11px] font-bold transition-colors border",
+        nanoMode === 'lite' ? "bg-yellow-500/20 border-yellow-500/40 text-yellow-400" :
+        nanoMode === 'med'  ? "bg-blue-500/20 border-blue-500/40 text-blue-400" :
+        "bg-purple-500/20 border-purple-500/40 text-purple-400"
+      )} title={
+        nanoMode === 'lite' ? "Lite: bara meddelandet" :
+        nanoMode === 'med'  ? "Med: historik, ingen systempromt" :
+        "Full: systempromt + historik"
+      }>
+      {nanoMode === 'lite' ? '⚡ Lite' : nanoMode === 'med' ? '⚙️ Med' : '🧠 Full'}
+      </button>
+      <button onClick={() => navigate('/settings')} className="p-2 rounded-lg hover:bg-gray-700 text-gray-400 transition-colors" title="Inställningar"><Settings className="w-5 h-5" /></button>
       </div>
       </header>
 
@@ -1271,7 +1078,7 @@ export const NanoView = () => {
       )}
       </div>
 
-      {/* CHATT-OMRÅDE */}
+      {/* CHATT */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
       {messages.map(renderMessage)}
       {status === 'working' && (
@@ -1286,168 +1093,85 @@ export const NanoView = () => {
         </div>
         </div>
       )}
-      <div ref={messagesEndRef} className="h-6 shrink-0" />
+      <div ref={messagesEndRef} className="h-10 shrink-0" />
       </div>
 
-      {/* INPUT OMRÅDE (HELT OMSTRUKTURERAT LÄNGST NER PÅ SKÄRMEN) */}
-      <div className="bg-gray-800 border-t border-gray-700 p-4 pb-6 flex-shrink-0">
+      {/* INPUT */}
+      <div className="bg-gray-800 border-t border-gray-700 p-4 pb-24 flex-shrink-0">
       <div className="max-w-4xl mx-auto flex flex-col gap-2">
 
-      {/* LÄGE-VÄXLARE */}
-      <div className="flex justify-center gap-3 mb-2">
-      <button onClick={() => {
-        setInputMode('chat');
-        stopListening();
-        window.speechSynthesis?.cancel();
-        TextToSpeech.stop().catch(()=>{});
-      }} className={clsx("px-8 py-2 rounded-full text-sm font-bold transition-all shadow-sm border", inputMode === 'chat' ? "bg-purple-600 border-purple-500 text-white" : "bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200")}>
-      💬 Chatt
-      </button>
-      <button onClick={() => {
-        setInputMode('voice');
-        startListening();
-      }} className={clsx("px-8 py-2 rounded-full text-sm font-bold transition-all shadow-sm border", inputMode === 'voice' ? "bg-green-600 border-green-500 text-white" : "bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200")}>
-      🎙️ Tala
-      </button>
-      </div>
-
-      {/* BIFOGADE FILER */}
       {attachedFiles.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-2">
+        <div className="flex flex-wrap gap-2">
         {attachedFiles.map((f, i) => (
-          <div key={i} className="relative group">
+          <div key={i} className="relative">
           {f.localUrl ? (
+            <div className="relative group">
             <img src={f.localUrl} alt={f.name} className="h-16 w-16 object-cover rounded-xl border border-purple-500/40" />
+            <button onClick={() => setAttachedFiles(prev => prev.filter((_, j) => j !== i))} className="absolute -top-1.5 -right-1.5 bg-gray-900 border border-gray-600 rounded-full p-0.5 text-gray-400 hover:text-white"><X className="w-3 h-3" /></button>
+            </div>
           ) : (
             <div className="flex items-center gap-2 bg-purple-900/40 border border-purple-500/40 rounded-lg px-3 py-1.5 text-xs text-purple-200">
-            <Paperclip className="w-3 h-3 shrink-0" /> <span className="truncate max-w-[160px]">{f.name}</span>
-            </div>
-          )}
-          <button onClick={() => setAttachedFiles(prev => prev.filter((_, j) => j !== i))} className="absolute -top-1.5 -right-1.5 bg-gray-900 border border-gray-600 rounded-full p-0.5 text-gray-400 hover:text-white"><X className="w-3 h-3" /></button>
-          </div>
-        ))}
-        </div>
-      )}
-
-      {inputMode === 'chat' ? (
-        /* -------- CHATT-GRÄNSSNITT -------- */
-        <div className="flex flex-col gap-2">
-        <div className="flex items-end gap-3">
-        <input ref={fileInputRef} type="file" multiple accept="image/*,*/*" className="hidden" onChange={handleFileSelect} />
-
-        <div className="flex flex-col gap-2 shrink-0">
-        <button onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="p-3.5 rounded-2xl bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 transition-colors flex items-center justify-center shadow-sm">
-        {isUploading ? <span className="w-5 h-5 block border-2 border-purple-400 border-t-transparent rounded-full animate-spin" /> : <Paperclip className="w-5 h-5" />}
-        </button>
-        </div>
-
-        <div className="flex-1 bg-gray-900 border border-gray-700 rounded-2xl overflow-hidden focus-within:ring-2 focus-within:ring-purple-500/50 transition-all relative">
-        <textarea
-        value={inputText}
-        onChange={(e) => setInputText(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-        placeholder={"Skriv ett uppdrag..."}
-        className="w-full bg-transparent text-white p-4 max-h-40 focus:outline-none resize-none"
-        rows={3}
-        />
-        </div>
-
-        <div className="flex flex-col gap-2 shrink-0 h-full justify-end">
-        <button onClick={() => handleSend()} disabled={(!inputText.trim() && attachedFiles.length === 0)} className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed p-4 rounded-2xl text-white transition-all shadow-lg active:scale-95 flex items-center justify-center h-[52px]">
-        <Send className="w-6 h-6 ml-1" />
-        </button>
-        </div>
-        </div>
-
-        <div className="flex justify-end pr-16 mt-1">
-        <button onClick={() => {
-          const next = nanoMode === 'lite' ? 'med' : nanoMode === 'med' ? 'full' : 'lite';
-          setNanoMode(next);
-          localStorage.setItem('NANO_MODE', next);
-        }} className={clsx("py-1.5 px-3 rounded-xl text-[10px] font-bold transition-colors border shadow-sm", nanoMode === 'lite' ? "bg-yellow-500/20 border-yellow-500/40 text-yellow-400" : nanoMode === 'med' ? "bg-blue-500/20 border-blue-500/40 text-blue-400" : "bg-purple-500/20 border-purple-500/40 text-purple-400")} title="Läge för kontext">
-        {nanoMode === 'lite' ? '⚡ Lite' : nanoMode === 'med' ? '⚙️ Med' : '🧠 Full'}
-        </button>
-        </div>
-        </div>
-      ) : (
-        /* -------- TALA-GRÄNSSNITT -------- */
-        <div className="flex flex-col items-center justify-center py-2 gap-4">
-        <div className="text-gray-300 text-base min-h-[60px] w-full max-w-lg text-center px-4 py-3 flex items-center justify-center bg-gray-900 rounded-xl border border-gray-700 break-words">
-        {isRecording ? (inputText || "Lyssnar...") : "Klicka på mikrofonen för att börja prata"}
-        </div>
-
-        <button onClick={toggleRecording} className={clsx("w-20 h-20 rounded-full transition-all shadow-xl flex items-center justify-center border-4", isRecording ? "bg-red-500 border-red-400 text-white animate-pulse scale-105" : "bg-gray-800 border-green-500 text-green-500 hover:bg-gray-700")}>
-        {isTranscribing ? <Loader2 size={32} className="animate-spin" /> : (isRecording ? <Square size={32} fill="currentColor" /> : <Mic size={36} />)}
-        </button>
-
-        <div className="flex gap-2 w-full max-w-md justify-center mt-2">
-        <button onClick={() => setSpeakerMode(!speakerMode)} className={clsx("flex-1 py-3 px-4 rounded-2xl text-xs font-bold transition-colors border text-center shadow-sm", speakerMode ? "bg-green-500/20 border-green-500/40 text-green-400" : "bg-gray-700 border-gray-600 text-gray-400")} title="Högtalare">
-        {speakerMode ? '🔊 Uppläsning PÅ' : '🔈 Uppläsning AV'}
-        </button>
-        <button onClick={() => {
-          const next = nanoMode === 'lite' ? 'med' : nanoMode === 'med' ? 'full' : 'lite';
-          setNanoMode(next);
-          localStorage.setItem('NANO_MODE', next);
-        }} className={clsx("flex-1 py-3 px-4 rounded-2xl text-xs font-bold transition-colors border text-center shadow-sm", nanoMode === 'lite' ? "bg-yellow-500/20 border-yellow-500/40 text-yellow-400" : nanoMode === 'med' ? "bg-blue-500/20 border-blue-500/40 text-blue-400" : "bg-purple-500/20 border-purple-500/40 text-purple-400")} title="Läge för kontext">
-        {nanoMode === 'lite' ? '⚡ Lite' : nanoMode === 'med' ? '⚙️ Med' : '🧠 Full'}
-        </button>
-        </div>
-        </div>
-      )}
-
-      </div>
-      </div>
-
-      {/* SESSIONS MODAL */}
-      {showSessionsMenu && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-        <div className="absolute inset-0 bg-black/60" onClick={() => setShowSessionsMenu(false)} />
-        <div className="relative bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl z-10 flex flex-col w-[90%] max-w-md max-h-[70vh]">
-        <div className="flex justify-between items-center px-5 py-4 border-b border-gray-700">
-        <span className="text-sm font-bold text-white uppercase tracking-wider">Dina Konversationer</span>
-        <button onClick={() => setShowSessionsMenu(false)} className="p-1 hover:bg-gray-700 rounded-lg transition-colors"><X className="w-5 h-5 text-gray-400 hover:text-white" /></button>
-        </div>
-        <div className="p-3 border-b border-gray-700/50">
-        <button onClick={startNewSession} className="w-full flex items-center gap-2 p-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl transition-all justify-center text-sm font-bold shadow-md active:scale-95">
-        <Plus className="w-5 h-5" /> Skapa ny konversation
-        </button>
-        </div>
-        <div className="overflow-y-auto flex-1 p-3 space-y-2">
-        {sessions.map(s => (
-          <div key={s.id} onClick={() => { if (editingSessionId !== s.id) loadSession(s.id); }} className={clsx("flex items-center justify-between p-3 rounded-xl cursor-pointer group transition-all border", currentSessionId === s.id ? "bg-gray-700 border-gray-600 text-white shadow-sm" : "bg-gray-800 border-transparent hover:bg-gray-700/50 text-gray-300")}>
-          {editingSessionId === s.id ? (
-            <input
-            autoFocus
-            type="text"
-            value={editingTitle}
-            onChange={(e) => setEditingTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.stopPropagation(); updateSessionTitle(s.id, editingTitle); }
-              if (e.key === 'Escape') { e.stopPropagation(); setEditingSessionId(null); }
-            }}
-            onBlur={() => updateSessionTitle(s.id, editingTitle)}
-            onClick={(e) => e.stopPropagation()}
-            className="flex-1 bg-gray-900 border border-purple-500 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
-            />
-          ) : (
-            <div className="truncate text-sm pr-2 flex-1 font-medium">{s.title}</div>
-          )}
-
-          {!editingSessionId && (
-            <div className="flex items-center gap-1 shrink-0">
-            <button onClick={(e) => { e.stopPropagation(); setEditingSessionId(s.id); setEditingTitle(s.title); }} className="p-2 text-gray-400 hover:text-blue-400 hover:bg-blue-500/10 transition-colors rounded-lg"><Edit2 className="w-4 h-4" /></button>
-            <button onClick={(e) => deleteSession(s.id, e)} className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-colors rounded-lg"><Trash2 className="w-4 h-4" /></button>
+            <Paperclip className="w-3 h-3 shrink-0" />
+            <span className="truncate max-w-[160px]">{f.name}</span>
+            <button onClick={() => setAttachedFiles(prev => prev.filter((_, j) => j !== i))} className="text-purple-400 hover:text-white"><X className="w-3 h-3" /></button>
             </div>
           )}
           </div>
         ))}
-        {sessions.length === 0 && <div className="text-center text-sm text-gray-500 py-8">Du har inga sparade chattar.</div>}
-        </div>
-        </div>
         </div>
       )}
 
-      {/* ACCESS MODAL */}
+      <div className="flex items-end gap-3">
+      <input ref={fileInputRef} type="file" multiple accept="image/*,*/*" className="hidden" onChange={handleFileSelect} />
+
+      <div className="flex flex-col gap-2 shrink-0">
+      <button onClick={() => fileInputRef.current?.click()} disabled={status === 'working' || isUploading} className="p-3.5 rounded-2xl bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 transition-colors flex items-center justify-center shadow-sm" title="Bifoga fil eller bild">
+      {isUploading ? <span className="w-5 h-5 block border-2 border-purple-400 border-t-transparent rounded-full animate-spin" /> : <Paperclip className="w-5 h-5" />}
+      </button>
+
+      <button onClick={toggleRecording} className={clsx("p-3.5 rounded-2xl transition-all shadow-sm flex items-center justify-center", isRecording ? "bg-red-500 text-white animate-pulse" : "bg-gray-700 text-gray-300 hover:bg-gray-600")} title="Tala in uppdrag">
+      {isTranscribing ? <Loader2 size={20} className="animate-spin" /> : (isRecording ? <Square size={20} fill="currentColor" /> : <Mic size={20} />)}
+      </button>
+      </div>
+
+      <div className="flex-1 bg-gray-900 border border-gray-700 rounded-2xl overflow-hidden focus-within:ring-2 focus-within:ring-purple-500/50 transition-all relative">
+      <textarea
+      value={inputText}
+      onChange={(e) => setInputText(e.target.value)}
+      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+      placeholder={isRecording && isLocalMode ? "Lyssnar..." : "Skriv ett uppdrag..."}
+      disabled={status === 'working'}
+      className="w-full bg-transparent text-white p-4 max-h-32 focus:outline-none resize-none disabled:opacity-50"
+      rows={1}
+      />
+      </div>
+
+      <button onClick={handleSend} disabled={!inputText.trim() && attachedFiles.length === 0 || status === 'working' || isTranscribing} className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed p-4 rounded-2xl text-white transition-all shadow-lg active:scale-95">
+      <Send className="w-6 h-6" />
+      </button>
+      </div>
+      </div>
+      </div>
+
+      {(showClearMenu || showSessionsMenu) && ( <div className="fixed inset-0 z-40" onClick={() => { setShowClearMenu(false); setShowSessionsMenu(false); }} /> )}
+
+      {lightboxUrl && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center" onClick={() => setLightboxUrl(null)}>
+        <img src={lightboxUrl} alt="Fullskärm" className="max-w-full max-h-full object-contain rounded-lg" />
+        <button className="absolute top-12 right-4 p-2 text-white bg-black/50 rounded-full"><X className="w-6 h-6" /></button>
+        </div>
+      )}
+
+      {ctxMenu && (
+        <>
+        <div className="fixed inset-0 z-40" onClick={() => setCtxMenu(null)} />
+        <div className="fixed z-50 bg-gray-800 border border-gray-700 rounded-xl shadow-xl overflow-hidden w-44" style={{ left: Math.min(ctxMenu.x, window.innerWidth - 180), top: Math.min(ctxMenu.y, window.innerHeight - 120) }}>
+        <button onClick={() => copyMessage(ctxMenu.msgId)} className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors"><span>📋</span> Kopiera</button>
+        <button onClick={() => deleteMessage(ctxMenu.msgId)} className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-400 hover:bg-red-900/30 transition-colors border-t border-gray-700"><span>🗑️</span> Ta bort</button>
+        </div>
+        </>
+      )}
+
       {showAccessSettings && (
         <div className="fixed inset-0 z-50 flex flex-col">
         <div className="absolute inset-0 bg-black/60" onClick={() => setShowAccessSettings(false)} />
@@ -1460,6 +1184,8 @@ export const NanoView = () => {
         <button onClick={() => setShowAccessSettings(false)} className="p-2 text-gray-400 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
         <div className="overflow-y-auto flex-1 p-3 space-y-2" style={{ maxHeight: '55dvh' }}>
+        {permissionsLoading && <div className="flex items-center justify-center py-10 gap-3 text-gray-500 text-sm"><span className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" /> Hämtar behörigheter...</div>}
+        {!permissionsLoading && permissions.length === 0 && <div className="text-center py-8 text-gray-500 text-xs">Inga behörigheter hittades.</div>}
         {!permissionsLoading && permissions.some(p => p.key.startsWith('folder:')) && (<div><p className="text-[10px] uppercase font-bold text-gray-500 px-1 mb-1">Mappar</p>{permissions.filter(p => p.key.startsWith('folder:')).map(perm => (<PermissionRow key={perm.key} perm={perm} onToggle={togglePermission} />))}</div>)}
         {!permissionsLoading && permissions.some(p => p.key.startsWith('mount:')) && (<div><p className="text-[10px] uppercase font-bold text-gray-500 px-1 mb-1 mt-2">Extra mappar</p>{permissions.filter(p => p.key.startsWith('mount:')).map(perm => (<PermissionRow key={perm.key} perm={perm} onToggle={togglePermission} onRemove={p => { removeMount(p.replace('mount:', '')); setPermissions(prev => prev.filter(x => x.key !== p)); }} />))}</div>)}
         {!permissionsLoading && permissions.some(p => p.key.startsWith('tool:')) && (<div><p className="text-[10px] uppercase font-bold text-gray-500 px-1 mb-1 mt-2">Verktyg</p>{permissions.filter(p => p.key.startsWith('tool:')).map(perm => (<PermissionRow key={perm.key} perm={perm} onToggle={togglePermission} />))}</div>)}
@@ -1475,50 +1201,6 @@ export const NanoView = () => {
         </div>
         </div>
         </div>
-      )}
-
-      {/* Lightbox / Fullskärmsbilder */}
-      {lightboxUrl && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center" onClick={() => setLightboxUrl(null)}>
-        <img src={lightboxUrl} alt="Fullskärm" className="max-w-full max-h-full object-contain rounded-lg" />
-        <button className="absolute top-12 right-4 p-2 text-white bg-black/50 rounded-full"><X className="w-6 h-6" /></button>
-        </div>
-      )}
-
-      {/* HTML REPORT VIEWER (OVERLAY) */}
-      {htmlReportUrl && (
-        <div className="fixed inset-0 z-[60] bg-gray-900 flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700 shadow-md">
-        <div className="flex items-center gap-2 text-white font-bold">
-        <span className="bg-purple-500 p-1.5 rounded-lg">📄</span>
-        Interaktiv Rapport
-        </div>
-        <button
-        onClick={() => setHtmlReportUrl(null)}
-        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-bold"
-        >
-        <X className="w-4 h-4" /> Stäng & Gå tillbaka
-        </button>
-        </div>
-        <div className="flex-1 bg-white">
-        <iframe
-        srcDoc={htmlReportUrl}
-        className="w-full h-full border-none"
-        sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
-        />
-        </div>
-        </div>
-      )}
-
-      {/* KONTEXT-MENY FÖR MEDDELANDEN */}
-      {ctxMenu && (
-        <>
-        <div className="fixed inset-0 z-40" onClick={() => setCtxMenu(null)} />
-        <div className="fixed z-50 bg-gray-800 border border-gray-700 rounded-xl shadow-xl overflow-hidden w-44" style={{ left: Math.min(ctxMenu.x, window.innerWidth - 180), top: Math.min(ctxMenu.y, window.innerHeight - 120) }}>
-        <button onClick={() => copyMessage(ctxMenu.msgId)} className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors"><span>📋</span> Kopiera</button>
-        <button onClick={() => deleteMessage(ctxMenu.msgId)} className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-400 hover:bg-red-900/30 transition-colors border-t border-gray-700"><span>🗑️</span> Ta bort</button>
-        </div>
-        </>
       )}
       </div>
     );

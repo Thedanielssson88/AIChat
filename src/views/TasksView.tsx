@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../services/db';
 import { Task } from '../types';
-import { Plus, Check, Trash2, PlayCircle, Filter, Briefcase } from 'lucide-react';
+import { Plus, Check, Trash2, PlayCircle, Filter, Briefcase, ArrowLeft } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useNavigate } from 'react-router-dom';
 
@@ -103,10 +103,18 @@ export const TasksView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-24">
-      <div className="bg-white p-6 pb-4 shadow-sm sticky top-0 z-10">
-        <h1 className="text-2xl font-bold text-gray-900 leading-tight">Uppgifter</h1>
-        <p className="text-sm text-gray-500 mt-1">Håll koll på allt som behöver göras.</p>
-      </div>
+      <header className="flex items-center gap-3 mb-6 pt-4 px-6 bg-white shadow-sm sticky top-0 z-10 pb-4">
+        <button 
+          onClick={() => navigate(-1)} 
+          className="p-2 -ml-2 bg-white rounded-full shadow-sm hover:bg-gray-50 border border-gray-100 transition-colors"
+        >
+          <ArrowLeft size={20} className="text-gray-600" />
+        </button>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Uppgifter</h1>
+          <p className="text-gray-500 text-sm">Här är dina uppgifter</p>
+        </div>
+      </header>
 
       <div className="p-6 space-y-6">
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">

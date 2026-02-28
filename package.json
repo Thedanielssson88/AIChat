@@ -13,6 +13,7 @@
   "dependencies": {
     "@anuradev/capacitor-background-mode": "^7.2.1",
     "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor-community/text-to-speech": "^8.0.0",
     "@capacitor/android": "^8.1.0",
     "@capacitor/app": "^8.0.1",
     "@capacitor/core": "^8.1.0",
@@ -21,6 +22,7 @@
     "@capawesome/capacitor-file-picker": "^8.0.2",
     "@capgo/capacitor-audio-recorder": "^8.0.12",
     "@google/genai": "^1.29.0",
+    "@microsoft/fetch-event-source": "^2.0.1",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.4.1",

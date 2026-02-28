@@ -20,7 +20,6 @@ export class MeetingDB extends Dexie {
   constructor() {
     super('RecallCRM');
 
-    // Version 4 - MÅSTE VARA KVAR FÖR ATT UPPDATERINGEN SKA FUNGERA
     this.version(4).stores({
       meetings: 'id, date, projectId, categoryId, *participantIds',
       people: 'id, name, *projectIds',
@@ -31,30 +30,25 @@ export class MeetingDB extends Dexie {
       projectMembers: 'id, projectId, personId, group'
     });
 
-    // Version 5 
     this.version(5).stores({
       tasks: 'id, status, assignedToId, linkedMeetingId, createdAt'
     });
 
-    // Version 6 (Lade till taggar)
     this.version(6).stores({
       tags: 'id, projectId',
       meetings: 'id, date, projectId, categoryId, *participantIds, *tagIds'
     });
 
-    // Version 7 (Lade till kö-systemet)
     this.version(7).stores({
       processingJobs: 'id, meetingId, status, createdAt'
     });
 
-    // Version 8 (AI-dagbok: dagar och inlägg)
     this.version(8).stores({
       days: 'id, date',
       entries: 'id, dayId, createdAt',
       entryAudio: 'id'
     });
 
-    // Version 9 (AI-chatt)
     this.version(9).stores({
       chats: 'id, updatedAt',
       chatMessages: 'id, chatId, timestamp'
@@ -66,26 +60,15 @@ export const db = new MeetingDB();
 
 export const seedDatabase = async () => {};
 
-// --- CRUD-funktioner för Projekt ---
-
+// --- CRUD-funktioner för Projekt & CRM ---
 export async function addProject(project: Omit<Project, 'id'>): Promise<string> {
   const newProject = { ...project, id: crypto.randomUUID() };
   await db.projects.add(newProject);
   return newProject.id;
 }
-
-export async function getAllProjects(): Promise<Project[]> {
-  return await db.projects.toArray();
-}
-
-export async function getProject(id: string): Promise<Project | undefined> {
-  return await db.projects.get(id);
-}
-
-export async function updateProject(id: string, changes: Partial<Project>): Promise<number> {
-  return await db.projects.update(id, changes);
-}
-
+export async function getAllProjects(): Promise<Project[]> { return await db.projects.toArray(); }
+export async function getProject(id: string): Promise<Project | undefined> { return await db.projects.get(id); }
+export async function updateProject(id: string, changes: Partial<Project>): Promise<number> { return await db.projects.update(id, changes); }
 export async function deleteProject(id: string): Promise<void> {
   await db.transaction('rw', db.projects, db.projectMembers, db.categories, db.meetings, async () => {
     await db.projectMembers.where({ projectId: id }).delete();
@@ -95,22 +78,13 @@ export async function deleteProject(id: string): Promise<void> {
   });
 }
 
-// --- CRUD-funktioner för Kategorier ---
-
 export async function addCategory(category: Omit<CategoryData, 'id'>): Promise<string> {
   const newCategory = { ...category, id: crypto.randomUUID() };
   await db.categories.add(newCategory);
   return newCategory.id;
 }
-
-export async function getCategoriesForProject(projectId: string): Promise<CategoryData[]> {
-  return await db.categories.where({ projectId }).toArray();
-}
-
-export async function updateCategory(id: string, changes: Partial<CategoryData>): Promise<number> {
-  return await db.categories.update(id, changes);
-}
-
+export async function getCategoriesForProject(projectId: string): Promise<CategoryData[]> { return await db.categories.where({ projectId }).toArray(); }
+export async function updateCategory(id: string, changes: Partial<CategoryData>): Promise<number> { return await db.categories.update(id, changes); }
 export async function deleteCategory(id: string): Promise<void> {
   await db.transaction('rw', db.categories, db.meetings, async () => {
     await db.meetings.where({ categoryId: id }).modify({ categoryId: undefined });
@@ -118,62 +92,31 @@ export async function deleteCategory(id: string): Promise<void> {
   });
 }
 
-// --- CRUD-funktioner för Projektmedlemmar ---
-
 export async function addProjectMember(projectId: string, personId: string, group: MemberGroup, customRole?: string): Promise<string> {
-  const newMember: ProjectMember = {
-    id: crypto.randomUUID(),
-    projectId,
-    personId,
-    group,
-    customRole
-  };
+  const newMember: ProjectMember = { id: crypto.randomUUID(), projectId, personId, group, customRole };
   await db.projectMembers.add(newMember);
   return newMember.id;
 }
-
-export async function getProjectMembers(projectId: string): Promise<ProjectMember[]> {
-  return await db.projectMembers.where({ projectId }).toArray();
-}
-
-export async function getProjectsForPerson(personId: string): Promise<ProjectMember[]> {
-  return await db.projectMembers.where({ personId }).toArray();
-}
-
-export async function updateProjectMember(id: string, changes: Partial<ProjectMember>): Promise<number> {
-  return await db.projectMembers.update(id, changes);
-}
-
-export async function removeProjectMember(id: string): Promise<void> {
-  await db.projectMembers.delete(id);
-}
+export async function getProjectMembers(projectId: string): Promise<ProjectMember[]> { return await db.projectMembers.where({ projectId }).toArray(); }
+export async function getProjectsForPerson(personId: string): Promise<ProjectMember[]> { return await db.projectMembers.where({ personId }).toArray(); }
+export async function updateProjectMember(id: string, changes: Partial<ProjectMember>): Promise<number> { return await db.projectMembers.update(id, changes); }
+export async function removeProjectMember(id: string): Promise<void> { await db.projectMembers.delete(id); }
 
 export async function deleteMeeting(meetingId: string): Promise<void> {
-    // Vi använder en transaktion för att säkerställa att allt raderas samtidigt
-    await db.transaction('rw', db.meetings, db.audioFiles, db.tasks, async () => {
-      // 1. Ta bort själva mötet
-      await db.meetings.delete(meetingId);
-      
-      // 2. Ta bort ljudfilen (superviktigt för att spara lagringsutrymme!)
-      await db.audioFiles.delete(meetingId);
-      
-      // 3. Ta bort alla uppgifter som skapades under just detta möte
-      await db.tasks.where('linkedMeetingId').equals(meetingId).delete();
-    });
-  }
+  await db.transaction('rw', db.meetings, db.audioFiles, db.tasks, async () => {
+    await db.meetings.delete(meetingId);
+    await db.audioFiles.delete(meetingId);
+    await db.tasks.where('linkedMeetingId').equals(meetingId).delete();
+  });
+}
 
-// --- CRUD för AI-dagbok: Day ---
-
+// --- CRUD för AI-dagbok ---
 export async function addDay(day: Omit<Day, 'id'>): Promise<string> {
   const newDay: Day = { ...day, id: crypto.randomUUID() };
   await db.days.add(newDay);
   return newDay.id;
 }
-
-export async function getDayByDate(date: string): Promise<Day | undefined> {
-  return await db.days.where('date').equals(date).first();
-}
-
+export async function getDayByDate(date: string): Promise<Day | undefined> { return await db.days.where('date').equals(date).first(); }
 export async function getOrCreateDayForDate(date: string): Promise<Day> {
   const existing = await getDayByDate(date);
   if (existing) return existing;
@@ -182,19 +125,9 @@ export async function getOrCreateDayForDate(date: string): Promise<Day> {
   if (!created) throw new Error('Failed to create day');
   return created;
 }
-
-export async function getAllDays(): Promise<Day[]> {
-  return await db.days.orderBy('date').reverse().toArray();
-}
-
-export async function getDay(id: string): Promise<Day | undefined> {
-  return await db.days.get(id);
-}
-
-export async function updateDay(id: string, changes: Partial<Day>): Promise<number> {
-  return await db.days.update(id, changes);
-}
-
+export async function getAllDays(): Promise<Day[]> { return await db.days.orderBy('date').reverse().toArray(); }
+export async function getDay(id: string): Promise<Day | undefined> { return await db.days.get(id); }
+export async function updateDay(id: string, changes: Partial<Day>): Promise<number> { return await db.days.update(id, changes); }
 export async function deleteDay(dayId: string): Promise<void> {
   await db.transaction('rw', db.days, db.entries, db.entryAudio, async () => {
     const entryIds = await db.entries.where('dayId').equals(dayId).primaryKeys();
@@ -204,34 +137,16 @@ export async function deleteDay(dayId: string): Promise<void> {
   });
 }
 
-// --- CRUD för AI-dagbok: Entry ---
-
 export async function addEntry(entry: Omit<Entry, 'id'>): Promise<string> {
   const newEntry: Entry = { ...entry, id: crypto.randomUUID() };
   await db.entries.add(newEntry);
   return newEntry.id;
 }
-
-export async function getEntriesForDay(dayId: string): Promise<Entry[]> {
-  return await db.entries.where('dayId').equals(dayId).sortBy('createdAt');
-}
-
-export async function getEntry(id: string): Promise<Entry | undefined> {
-  return await db.entries.get(id);
-}
-
-export async function updateEntry(id: string, changes: Partial<Entry>): Promise<number> {
-  return await db.entries.update(id, changes);
-}
-
-export async function setEntryAudio(entryId: string, blob: Blob, mimeType: string): Promise<void> {
-  await db.entryAudio.put({ id: entryId, blob, mimeType });
-}
-
-export async function getEntryAudio(entryId: string): Promise<EntryAudio | undefined> {
-  return await db.entryAudio.get(entryId);
-}
-
+export async function getEntriesForDay(dayId: string): Promise<Entry[]> { return await db.entries.where('dayId').equals(dayId).sortBy('createdAt'); }
+export async function getEntry(id: string): Promise<Entry | undefined> { return await db.entries.get(id); }
+export async function updateEntry(id: string, changes: Partial<Entry>): Promise<number> { return await db.entries.update(id, changes); }
+export async function setEntryAudio(entryId: string, blob: Blob, mimeType: string): Promise<void> { await db.entryAudio.put({ id: entryId, blob, mimeType }); }
+export async function getEntryAudio(entryId: string): Promise<EntryAudio | undefined> { return await db.entryAudio.get(entryId); }
 export async function deleteEntry(entryId: string): Promise<void> {
   await db.transaction('rw', db.entries, db.entryAudio, async () => {
     await db.entryAudio.delete(entryId);
@@ -240,35 +155,20 @@ export async function deleteEntry(entryId: string): Promise<void> {
 }
 
 // --- CRUD för AI-chatt ---
-
 export async function createChat(title: string): Promise<string> {
   const id = crypto.randomUUID();
   await db.chats.add({ id, title, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   return id;
 }
-
-export async function getChats(): Promise<Chat[]> {
-  return await db.chats.orderBy('updatedAt').reverse().toArray();
-}
-
+export async function getChats(): Promise<Chat[]> { return await db.chats.orderBy('updatedAt').reverse().toArray(); }
 export async function deleteChat(id: string): Promise<void> {
   await db.transaction('rw', db.chats, db.chatMessages, async () => {
     await db.chatMessages.where('chatId').equals(id).delete();
     await db.chats.delete(id);
   });
 }
-
 export async function addChatMessage(chatId: string, role: 'user' | 'assistant', content: string): Promise<void> {
-  await db.chatMessages.add({
-    id: crypto.randomUUID(),
-    chatId,
-    role,
-    content,
-    timestamp: new Date().toISOString()
-  });
+  await db.chatMessages.add({ id: crypto.randomUUID(), chatId, role, content, timestamp: new Date().toISOString() });
   await db.chats.update(chatId, { updatedAt: new Date().toISOString() });
 }
-
-export async function getChatMessages(chatId: string): Promise<ChatMessage[]> {
-  return await db.chatMessages.where('chatId').equals(chatId).sortBy('timestamp');
-}
+export async function getChatMessages(chatId: string): Promise<ChatMessage[]> { return await db.chatMessages.where('chatId').equals(chatId).sortBy('timestamp'); }

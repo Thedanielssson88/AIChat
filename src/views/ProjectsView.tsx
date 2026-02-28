@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, addProject } from '../services/db';
-import { Plus, Briefcase, FolderPlus, Users, FolderTree, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Briefcase, FolderPlus, Users, FolderTree, ChevronRight, ArrowLeft } from 'lucide-react';
 
 const ProjectsView: React.FC = () => {
+  const navigate = useNavigate();
   const [newProjectName, setNewProjectName] = useState('');
 
   // Live queries för att hämta all data
@@ -27,10 +29,18 @@ const ProjectsView: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 pb-24">
       {/* HEADER */}
-      <div className="bg-white p-6 pb-4 shadow-sm sticky top-0 z-10">
-        <h1 className="text-2xl font-bold text-gray-900 leading-tight">Alla Projekt</h1>
-        <p className="text-sm text-gray-500 mt-1">Hantera dina team och kategorier</p>
-      </div>
+      <header className="flex items-center gap-3 mb-6 pt-4 px-6 bg-white shadow-sm sticky top-0 z-10 pb-4">
+        <button 
+          onClick={() => navigate(-1)} 
+          className="p-2 -ml-2 bg-white rounded-full shadow-sm hover:bg-gray-50 border border-gray-100 transition-colors"
+        >
+          <ArrowLeft size={20} className="text-gray-600" />
+        </button>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Projekt</h1>
+          <p className="text-gray-500 text-sm">Här är dina projekt</p>
+        </div>
+      </header>
 
       <div className="p-6 space-y-8">
         

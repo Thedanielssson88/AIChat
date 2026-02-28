@@ -1,19 +1,18 @@
 import { db } from './db';
-import { transcribeEntryAI } from './geminiService';
+import { transcribeEntryAI, summarizeDayAI, processMeetingAI } from './geminiService';
 
 let isProcessingQueue = false;
 
-// Vi använder den gamla 'meetingId'-kolumnen för 'entryId' temporärt
-// om vi inte vill bygga om processingJobs-tabellen i db.ts just nu.
-export const addToQueue = async (entryId: string, type: 'audio' | 'text' = 'audio') => {
+// Används gemensamt av Dagboksinlägg och Möten
+export const addToQueue = async (id: string, type: 'audio' | 'text' = 'audio') => {
   await db.processingJobs.add({
     id: crypto.randomUUID(),
-    meetingId: entryId, // Här sparar vi entryId!
-    status: 'pending',
-    progress: 0,
-    message: 'I kö...',
-    type,
-    createdAt: new Date().toISOString()
+                              meetingId: id, // Används för BÅDE möten och dagboksinlägg
+                              status: 'pending',
+                              progress: 0,
+                              message: 'I kö...',
+                              type,
+                              createdAt: new Date().toISOString()
   });
 
   processQueue();
@@ -30,28 +29,50 @@ export const processQueue = async () => {
       return;
     }
 
+    // Ta det äldsta jobbet först
     const job = pendingJobs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0];
-    const entryId = job.meetingId;
+    const id = job.meetingId;
 
-    await db.processingJobs.update(job.id, { status: 'processing', message: 'Startar transkribering...', progress: 5 });
+    await db.processingJobs.update(job.id, { status: 'processing', message: 'Startar process...', progress: 5 });
 
     try {
-      // Anropa vår nya transkriberings-AI
-      await transcribeEntryAI(entryId, (progress, msg) => {
-        db.processingJobs.update(job.id, { progress, message: msg });
-      });
+      // HYBRID-LOGIK: Är det ett CRM-möte eller ett Dagboksinlägg?
+      const isMeeting = await db.meetings.get(id);
+      const isEntry = await db.entries.get(id);
 
-      // Rensa jobbet när det är klart
+      if (isMeeting) {
+        // --- KÖR CRM-MÖTE ---
+        await processMeetingAI(id, async (progress, msg) => {
+          await db.processingJobs.update(job.id, { progress, message: msg });
+        });
+      } else if (isEntry) {
+        // --- KÖR DAGBOKSINLÄGG ---
+        await transcribeEntryAI(id, async (progress, msg) => {
+          await db.processingJobs.update(job.id, { progress, message: msg });
+        });
+
+        await db.processingJobs.update(job.id, { progress: 90, message: 'Sammanfattar dagen...' });
+        await summarizeDayAI(isEntry.dayId);
+      } else {
+        throw new Error("Kunde inte hitta varken möte eller dagboksinlägg i databasen.");
+      }
+
+      // Klar! Ta bort jobbet ur kön.
       await db.processingJobs.delete(job.id);
+
     } catch (error: any) {
       console.error("Fel vid bearbetning av kö:", error);
       await db.processingJobs.update(job.id, { status: 'error', message: error.message || 'Ett fel uppstod' });
+
+      // Återställ eventuell isProcessed-flagga
+      if (await db.meetings.get(id)) {
+        await db.meetings.update(id, { isProcessed: false });
+      }
     }
   } catch (error) {
     console.error("Generellt kö-fel:", error);
   } finally {
     isProcessingQueue = false;
-    // Kolla om det finns fler i kön
     setTimeout(processQueue, 1000);
   }
 };

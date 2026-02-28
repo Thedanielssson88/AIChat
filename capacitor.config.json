@@ -1,14 +1,15 @@
 {
-  "appId": "com.dagboksapp.app",
-  "appName": "Dagboksapp",
+  "appId": "com.aichat.app",
+  "appName": "AIChat",
   "webDir": "dist",
   "bundledWebRuntime": false,
   "server": {
-    "cleartext": true
+    "cleartext": true,
+    "androidScheme": "http"
   },
   "plugins": {
     "CapacitorHttp": {
-      "enabled": true
+      "enabled": false
     }
   }
 }

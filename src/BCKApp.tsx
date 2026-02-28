@@ -4,8 +4,6 @@ import { Capacitor } from '@capacitor/core';
 import { seedDatabase } from './services/db';
 import { processQueue } from './services/queueService';
 import { initLocalEngine } from './services/geminiService';
-
-// -- Importerade vyer --
 import { ChatView } from './views/ChatView';
 import { RecordView } from './views/RecordView';
 import { TasksView } from './views/TasksView';
@@ -18,8 +16,7 @@ import { MeetingDetail } from './views/MeetingDetail';
 import { MeetingDetailsView } from './views/MeetingDetailsView';
 import { QueueView } from './views/QueueView';
 import { BottomNav } from './components/BottomNav';
-import { NanoView } from './views/NanoView';
-import { Dashboard } from './views/Dashboard'; // <-- HÄR ÄR IMPORTEN SOM SAKNADES
+import { NanoView } from './views/NanoView'; // <-- LÄGG TILL DENNA IMPORT
 
 const HardwareBackButtonHandler = () => {
   const navigate = useNavigate();
@@ -68,27 +65,26 @@ function App() {
 
   return (
     <BrowserRouter>
-    <HardwareBackButtonHandler />
-    <div className="max-w-md mx-auto bg-white min-h-screen relative shadow-2xl overflow-hidden flex flex-col">
-    <div className="flex-1 overflow-y-auto no-scrollbar">
-    <Routes>
-    <Route path="/" element={<ChatView />} />
-    <Route path="/nano" element={<NanoView />} />
-    <Route path="/dashboard" element={<Dashboard />} /> {/* <-- ROUTEN SOM SAKNADES */}
-    <Route path="/projects" element={<ProjectsView />} />
-    <Route path="/project/:projectId" element={<ProjectDetailView />} />
-    <Route path="/meeting/:id" element={<MeetingDetail />} />
-    <Route path="/meeting/:id/details" element={<MeetingDetailsView />} />
-    <Route path="/people" element={<PeopleView />} />
-    <Route path="/person/:id" element={<PersonDetail />} />
-    <Route path="/tasks" element={<TasksView />} />
-    <Route path="/record" element={<RecordView />} />
-    <Route path="/queue" element={<QueueView />} />
-    <Route path="/settings" element={<SettingsView />} />
-    </Routes>
-    </div>
-    <BottomNav />
-    </div>
+      <HardwareBackButtonHandler /> 
+      <div className="max-w-md mx-auto bg-white min-h-screen relative shadow-2xl overflow-hidden flex flex-col">
+        <div className="flex-1 overflow-y-auto no-scrollbar">
+          <Routes>
+            <Route path="/" element={<ChatView />} />
+            <Route path="/nano" element={<NanoView />} /> {/* <-- LÄGG TILL DENNA ROUTE */}
+            <Route path="/projects" element={<ProjectsView />} />
+            <Route path="/project/:projectId" element={<ProjectDetailView />} />
+            <Route path="/meeting/:id" element={<MeetingDetail />} />
+            <Route path="/meeting/:id/details" element={<MeetingDetailsView />} />
+            <Route path="/people" element={<PeopleView />} />
+            <Route path="/person/:id" element={<PersonDetail />} />
+            <Route path="/tasks" element={<TasksView />} />
+            <Route path="/record" element={<RecordView />} />
+            <Route path="/queue" element={<QueueView />} />
+            <Route path="/settings" element={<SettingsView />} />
+          </Routes>
+        </div>
+        <BottomNav />
+      </div>
     </BrowserRouter>
   );
 }
